@@ -248,24 +248,104 @@ def perform_industry_detection_search(company_name: str, prospect_phone: str = N
     
     return all_results
 
+def perform_fast_industry_detection_search(company_name: str, prospect_phone: str = None, prospect_email: str = None):
+    """
+    Performs targeted searches to gather information for industry detection.
+    Optimized for speed, reduces delays and results.
+    
+    Args:
+        company_name: The company name
+        prospect_phone: Phone number (optional)
+        prospect_email: Email domain (optional)
+    
+    Returns:
+        list: Search results for industry analysis
+    """
+    print(f"    -> Performing FAST industry detection search for: {company_name}")
+    
+    # Reduced query set for speed
+    industry_queries = [
+        f'"{company_name}" company profile',
+        f'"{company_name}" about us',
+        f'"{company_name}" business description',
+        f'"{company_name}" what we do',
+        f'"{company_name}" services',
+        f'"{company_name}" products',
+        f'"{company_name}" industry sector'
+    ]
+    
+    # Add phone-based search if available
+    if prospect_phone:
+        industry_queries.append(f'"{company_name}" "{prospect_phone}"')
+    
+    # Add email domain search if available
+    if prospect_email and '@' in prospect_email:
+        email_domain = prospect_email.split('@')[1]
+        industry_queries.append(f'"{company_name}" "{email_domain}"')
+    
+    all_results = []
+    
+    for query in industry_queries:
+        print(f"      -> FAST industry detection query: {query}")
+        
+        # OPTIMIZED: Reduced delays for speed
+        delay = random.uniform(0.8, 1.2)  # Was 1.5-2.5
+        sleep(delay)
+        
+        # Try DuckDuckGo first (more reliable)
+        try:
+            with DDGS() as ddgs:
+                # OPTIMIZED: Reduced results for speed
+                ddgs_results = list(ddgs.text(query, max_results=6))  # Was 10
+                for result in ddgs_results:
+                    all_results.append({
+                        "source": "DuckDuckGo",
+                        "query": query,
+                        "title": result.get('title', 'N/A'),
+                        "link": result.get('href', 'N/A'),
+                        "snippet": result.get('body', 'N/A')
+                    })
+        except Exception as e:
+            print(f"        [WARN] DuckDuckGo failed for FAST industry detection: {e}")
+        
+        # Try Google as backup (OPTIMIZED: faster delays)
+        try:
+            sleep(random.uniform(1.0, 1.5))  # Was 2.0-3.0
+            google_results_gen = google_search(query, num_results=6, sleep_interval=1)  # Was 10, sleep_interval=2
+            google_results = list(google_results_gen)
+            for url in google_results:
+                all_results.append({
+                    "source": "Google",
+                    "query": query,
+                    "title": "N/A (Google search)",
+                    "link": url,
+                    "snippet": "N/A (Google search)"
+                })
+        except Exception as e:
+            print(f"        [WARN] Google search failed for FAST industry detection: {e}")
+    
+    return all_results
+
 def perform_enhanced_web_searches(company_name: str, prospect_name: str, industry: str = None, num_results: int = 5):
     """
     Performs comprehensive web searches using multiple strategies and sources.
-    Prioritizes prospect-specific searches before falling back to broader company research.
+    OPTIMIZED FOR SPEED: Target completion within 90 seconds.
+    NEW FLOW: Prospect searches first → Industry detection → Company research with context.
     
     Args:
         company_name: The target company name
         prospect_name: The target prospect name
-        industry: The industry the company operates in
+        industry: The industry the company operates in (optional, will be detected if not provided)
         num_results: Number of results per query
     
     Returns:
         dict: Comprehensive intelligence report
     """
-    print(f"  [ENRICH] Starting enhanced web searches for '{prospect_name} at {company_name}'...")
+    print(f"  [ENRICH] Starting OPTIMIZED web searches for '{prospect_name} at {company_name}'...")
+    print(f"  [ENRICH] Target completion time: 90 seconds")
     
     intelligence_report = {
-        "prospect_specific_intelligence": {},  # NEW: Prospect-specific results
+        "prospect_specific_intelligence": {},
         "company_intelligence": {},
         "industry_intelligence": {},
         "competitive_intelligence": {},
@@ -275,218 +355,291 @@ def perform_enhanced_web_searches(company_name: str, prospect_name: str, industr
             "industry": industry,
             "total_queries": 0,
             "successful_searches": 0,
-            "prospect_results_found": False
+            "prospect_results_found": False,
+            "industry_detected_from_prospect_results": False
         }
     }
     
     total_queries = 0
     successful_searches = 0
     
-    # --- PHASE 1: Prospect-Specific Searches (Primary Strategy) ---
-    print("  [ENRICH] Phase 1: Prospect-specific searches (primary strategy)...")
-    
-    prospect_specific_queries = [
-        f'"{prospect_name}" "{company_name}"',
-        f'"{prospect_name}" "{company_name}" title role position',
-        f'"{prospect_name}" "{company_name}" linkedin profile',
-        f'"{prospect_name}" "{company_name}" executive management',
-        f'"{prospect_name}" "{company_name}" professional background',
-        f'"{prospect_name}" "{company_name}" career experience',
-        f'"{prospect_name}" "{company_name}" business contact',
-        f'"{prospect_name}" "{company_name}" email phone'
-    ]
-    
-    prospect_results = []
-    prospect_results_found = False
-    
-    for query in prospect_specific_queries:
-        total_queries += 1
-        print(f"    -> Prospect-specific query: {query}")
+    try:
+        # --- PHASE 1: FAST Prospect-Specific Searches (Primary Strategy) ---
+        print("  [ENRICH] Phase 1: FAST prospect-specific searches (target: 45 seconds)...")
         
-        # Add delay to avoid rate limiting
-        delay = random.uniform(1.5, 2.5)
-        sleep(delay)
+        # Reduced query set for speed - focus on most effective searches
+        prospect_specific_queries = [
+            f'"{prospect_name}" "{company_name}"',
+            f'"{prospect_name}" "{company_name}" linkedin',
+            f'"{prospect_name}" "{company_name}" title role',
+            f'"{prospect_name}" "{company_name}" executive',
+            f'"{prospect_name}" "{company_name}" contact'
+        ]
         
-        # Try DuckDuckGo first (more reliable)
-        try:
-            with DDGS() as ddgs:
-                # Get more results for prospect searches to ensure we have enough
-                ddgs_results = list(ddgs.text(query, max_results=10))
-                for result in ddgs_results:
+        prospect_results = []
+        prospect_results_found = False
+        
+        for query in prospect_specific_queries:
+            total_queries += 1
+            print(f"    -> FAST prospect query: {query}")
+            
+            # OPTIMIZED: Reduced delays for speed
+            delay = random.uniform(0.8, 1.2)  # Was 1.5-2.5
+            sleep(delay)
+            
+            # Try DuckDuckGo first (more reliable)
+            try:
+                with DDGS() as ddgs:
+                    # OPTIMIZED: Reduced results for speed
+                    ddgs_results = list(ddgs.text(query, max_results=20))  # Was 10
+                    for result in ddgs_results:
+                        prospect_results.append({
+                            "source": "DuckDuckGo",
+                            "query": query,
+                            "title": result.get('title', 'N/A'),
+                            "link": result.get('href', 'N/A'),
+                            "snippet": result.get('body', 'N/A'),
+                            "timestamp": pd.Timestamp.now().isoformat(),
+                            "search_type": "prospect_specific"
+                        })
+                    successful_searches += 1
+                    print(f"      -> Found {len(ddgs_results)} DuckDuckGo results")
+                    
+            except Exception as e:
+                print(f"        [WARN] DuckDuckGo failed for '{query}': {e}")
+            
+            # Try Google as backup (OPTIMIZED: faster delays)
+            try:
+                sleep(random.uniform(1.0, 1.5))  # Was 2.0-3.0
+                google_results_gen = google_search(query, num_results=20, sleep_interval=1)  # Was 10, sleep_interval=2
+                google_results = list(google_results_gen)
+                for url in google_results:
                     prospect_results.append({
-                        "source": "DuckDuckGo",
+                        "source": "Google",
                         "query": query,
-                        "title": result.get('title', 'N/A'),
-                        "link": result.get('href', 'N/A'),
-                        "snippet": result.get('body', 'N/A'),
+                        "title": "N/A (Google search)",
+                        "link": url,
+                        "snippet": "N/A (Google search)",
                         "timestamp": pd.Timestamp.now().isoformat(),
                         "search_type": "prospect_specific"
                     })
                 successful_searches += 1
-                print(f"      -> Found {len(ddgs_results)} DuckDuckGo results")
+                print(f"      -> Found {len(google_results)} Google results")
                 
-        except Exception as e:
-            print(f"        [WARN] DuckDuckGo failed for '{query}': {e}")
+            except Exception as e:
+                print(f"        [WARN] Google search failed for '{query}': {e}")
         
-        # Try Google as backup (with longer delay)
-        try:
-            sleep(random.uniform(2.0, 3.0))
-            google_results_gen = google_search(query, num_results=10, sleep_interval=2)
-            google_results = list(google_results_gen)
-            for url in google_results:
-                prospect_results.append({
-                    "source": "Google",
-                    "query": query,
-                    "title": "N/A (Google search)",
-                    "link": url,
-                    "snippet": "N/A (Google search)",
-                    "timestamp": pd.Timestamp.now().isoformat(),
-                    "search_type": "prospect_specific"
-                })
-            successful_searches += 1
-            print(f"      -> Found {len(google_results)} Google results")
+        # Check if we found prospect-specific results
+        if prospect_results:
+            prospect_results_found = True
+            intelligence_report["search_metadata"]["prospect_results_found"] = True
+            print(f"  [ENRICH] ✅ Found {len(prospect_results)} prospect-specific results!")
             
-        except Exception as e:
-            print(f"        [WARN] Google search failed for '{query}': {e}")
-    
-    # Check if we found prospect-specific results
-    if prospect_results:
-        prospect_results_found = True
-        intelligence_report["search_metadata"]["prospect_results_found"] = True
-        print(f"  [ENRICH] ✅ Found {len(prospect_results)} prospect-specific results!")
-        
-        # Ensure we have at least 10 relevant results
-        if len(prospect_results) < 10:
-            print(f"  [ENRICH] ⚠️  Only found {len(prospect_results)} prospect results, need at least 10")
-            # Additional targeted searches to get more results
-            additional_queries = [
-                f'"{prospect_name}" "{company_name}" contact information',
-                f'"{prospect_name}" "{company_name}" professional history',
-                f'"{prospect_name}" "{company_name}" business role',
-                f'"{prospect_name}" "{company_name}" executive team'
-            ]
-            
-            for query in additional_queries:
-                total_queries += 1
-                print(f"    -> Additional prospect query: {query}")
-                sleep(random.uniform(1.5, 2.5))
+            # OPTIMIZED: Only run additional searches if we have very few results
+            if len(prospect_results) < 5:  # Was 10
+                print(f"  [ENRICH] ⚠️  Only found {len(prospect_results)} prospect results, running 2 additional queries...")
+                # Reduced additional queries for speed
+                additional_queries = [
+                    f'"{prospect_name}" "{company_name}" professional',
+                    f'"{prospect_name}" "{company_name}" business'
+                ]
                 
-                try:
-                    with DDGS() as ddgs:
-                        ddgs_results = list(ddgs.text(query, max_results=5))
-                        for result in ddgs_results:
+                for query in additional_queries:
+                    total_queries += 1
+                    print(f"    -> Additional FAST query: {query}")
+                    sleep(random.uniform(0.8, 1.2))  # OPTIMIZED: faster delays
+                    
+                    try:
+                        with DDGS() as ddgs:
+                            ddgs_results = list(ddgs.text(query, max_results=3))  # Was 5
+                            for result in ddgs_results:
+                                prospect_results.append({
+                                    "source": "DuckDuckGo",
+                                    "query": query,
+                                    "title": result.get('title', 'N/A'),
+                                    "link": result.get('href', 'N/A'),
+                                    "snippet": result.get('body', 'N/A'),
+                                    "timestamp": pd.Timestamp.now().isoformat(),
+                                    "search_type": "prospect_specific_additional"
+                                })
+                            successful_searches += 1
+                            
+                    except Exception as e:
+                        print(f"        [WARN] Additional DuckDuckGo search failed: {e}")
+                    
+                    # Try Google for additional queries too (OPTIMIZED: faster)
+                    try:
+                        sleep(random.uniform(1.0, 1.5))  # Was 2.0-3.0
+                        google_results_gen = google_search(query, num_results=3, sleep_interval=1)  # Was 5, sleep_interval=2
+                        google_results = list(google_results_gen)
+                        for url in google_results:
                             prospect_results.append({
-                                "source": "DuckDuckGo",
+                                "source": "Google",
                                 "query": query,
-                                "title": result.get('title', 'N/A'),
-                                "link": result.get('href', 'N/A'),
-                                "snippet": result.get('body', 'N/A'),
+                                "title": "N/A (Google search)",
+                                "link": url,
+                                "snippet": "N/A (Google search)",
                                 "timestamp": pd.Timestamp.now().isoformat(),
                                 "search_type": "prospect_specific_additional"
                             })
                         successful_searches += 1
                         
-                except Exception as e:
-                    print(f"        [WARN] Additional DuckDuckGo search failed: {e}")
-        
-        # Store prospect-specific results
-        intelligence_report["prospect_specific_intelligence"] = {
-            "prospect_profile": prospect_results[:10],  # Top 10 most relevant
-            "total_results": len(prospect_results),
-            "search_strategy": "prospect_name_company_name_primary"
-        }
-        
-        print(f"  [ENRICH] ✅ Prospect intelligence complete: {len(prospect_results)} total results")
-    
-    else:
-        print(f"  [ENRICH] ❌ No prospect-specific results found, falling back to company research")
-    
-    # --- PHASE 2: Company Research (Fallback Strategy) ---
-    print("  [ENRICH] Phase 2: Company research (fallback strategy)...")
-    
-    # Generate company search queries
-    all_queries = generate_search_queries(company_name, prospect_name, industry)
-    
-    # Process each category of queries
-    for category, query_groups in all_queries.items():
-        if not query_groups:  # Skip empty industry queries
-            continue
+                    except Exception as e:
+                        print(f"        [WARN] Additional Google search failed: {e}")
             
-        intelligence_report[f"{category}_intelligence"] = {}
+            # Store prospect-specific results
+            intelligence_report["prospect_specific_intelligence"] = {
+                "prospect_profile": prospect_results[:8],  # Top 8 most relevant (was 10)
+                "total_results": len(prospect_results),
+                "search_strategy": "prospect_name_company_name_primary_optimized"
+            }
+            
+            print(f"  [ENRICH] ✅ Prospect intelligence complete: {len(prospect_results)} total results")
+            print(f"  [ENRICH] 📊 Prospect results breakdown:")
+            print(f"    -> Total results: {len(prospect_results)}")
+            print(f"    -> DuckDuckGo results: {len([r for r in prospect_results if r['source'] == 'DuckDuckGo'])}")
+            print(f"    -> Google results: {len([r for r in prospect_results if r['source'] == 'Google'])}")
         
-        for query_type, queries in query_groups.items():
-            print(f"    -> Researching {category}: {query_type}")
-            
-            category_results = []
-            
-            for query in queries:
-                total_queries += 1
-                print(f"      -> Query: {query}")
+        else:
+            print(f"  [ENRICH] ❌ No prospect-specific results found")
+        
+        # --- PHASE 2: FAST Industry Detection from Prospect Results ---
+        print("  [ENRICH] Phase 2: FAST industry detection (target: 15 seconds)...")
+        
+        detected_industry = industry  # Use provided industry if available
+        
+        if not detected_industry and prospect_results:
+            print("  [ENRICH] Using prospect search results to detect industry...")
+            print(f"  [ENRICH] Analyzing {len(prospect_results)} prospect results for industry context...")
+            try:
+                detected_industry = detect_industry_with_gemini(company_name, prospect_results)
+                intelligence_report["search_metadata"]["industry_detected_from_prospect_results"] = True
+                print(f"  [ENRICH] ✅ Industry detected from prospect results: {detected_industry}")
+            except Exception as e:
+                print(f"  [ERROR] Industry detection from prospect results failed: {e}")
+                detected_industry = "Unknown (Detection failed)"
+        
+        elif not detected_industry and not prospect_results:
+            print("  [ENRICH] No prospect results available, performing FAST basic industry detection...")
+            try:
+                # OPTIMIZED: Reduced industry detection queries for speed
+                industry_search_results = perform_fast_industry_detection_search(company_name)
+                if industry_search_results:
+                    detected_industry = detect_industry_with_gemini(company_name, industry_search_results)
+                else:
+                    detected_industry = "Unknown (No search results)"
+                print(f"  [ENRICH] Industry detection complete: {detected_industry}")
+            except Exception as e:
+                print(f"  [ERROR] Basic industry detection failed: {e}")
+                detected_industry = "Unknown (Detection failed)"
+        
+        # Update the intelligence report with detected industry
+        intelligence_report["search_metadata"]["industry"] = detected_industry
+        
+        # --- PHASE 3: FAST Company Research with Industry Context ---
+        print("  [ENRICH] Phase 3: FAST company research (target: 30 seconds)...")
+        
+        # Generate company search queries using detected industry
+        all_queries = generate_search_queries(company_name, prospect_name, detected_industry)
+        
+        # OPTIMIZED: Process only essential categories for speed
+        essential_categories = ["company_overview", "industry_trends"]  # Focus on most important
+        
+        for category, query_groups in all_queries.items():
+            if not query_groups:  # Skip empty industry queries
+                continue
                 
-                # Add intelligent delays to avoid rate limiting
-                delay = random.uniform(1.5, 3.0)
-                sleep(delay)
+            intelligence_report[f"{category}_intelligence"] = {}
+            
+            for query_type, queries in query_groups.items():
+                # OPTIMIZED: Skip non-essential queries for speed
+                if category == "industry" and query_type not in essential_categories:
+                    continue
+                if category == "company" and query_type not in essential_categories:
+                    continue
                 
-                # Try DuckDuckGo first (more reliable)
-                try:
-                    with DDGS() as ddgs:
-                        ddgs_results = list(ddgs.text(query, max_results=num_results))
-                        for result in ddgs_results:
+                print(f"    -> FAST researching {category}: {query_type}")
+                
+                category_results = []
+                
+                # OPTIMIZED: Process only first 2 queries per type for speed
+                for query in queries[:2]:  # Was processing all queries
+                    total_queries += 1
+                    print(f"      -> FAST query: {query}")
+                    
+                    # OPTIMIZED: Faster delays for speed
+                    delay = random.uniform(0.8, 1.5)  # Was 1.5-3.0
+                    sleep(delay)
+                    
+                    # Try DuckDuckGo first (more reliable)
+                    try:
+                        with DDGS() as ddgs:
+                            # OPTIMIZED: Reduced results for speed
+                            ddgs_results = list(ddgs.text(query, max_results=3))  # Was num_results (5)
+                            for result in ddgs_results:
+                                category_results.append({
+                                    "source": "DuckDuckGo",
+                                    "query": query,
+                                    "title": result.get('title', 'N/A'),
+                                    "link": result.get('href', 'N/A'),
+                                    "snippet": result.get('body', 'N/A'),
+                                    "timestamp": pd.Timestamp.now().isoformat(),
+                                    "search_type": "company_research"
+                                })
+                            successful_searches += 1
+                            
+                    except Exception as e:
+                        print(f"        [WARN] DuckDuckGo failed for '{query}': {e}")
+                    
+                    # Try Google as backup (OPTIMIZED: faster delays)
+                    try:
+                        sleep(random.uniform(1.0, 2.0))  # Was 2.0-4.0
+                        google_results_gen = google_search(query, num_results=3, sleep_interval=1)  # Was num_results, sleep_interval=2
+                        for url in google_results_gen:
                             category_results.append({
-                                "source": "DuckDuckGo",
+                                "source": "Google",
                                 "query": query,
-                                "title": result.get('title', 'N/A'),
-                                "link": result.get('href', 'N/A'),
-                                "snippet": result.get('body', 'N/A'),
+                                "title": "N/A (Google search)",
+                                "link": url,
+                                "snippet": "N/A (Google search)",
                                 "timestamp": pd.Timestamp.now().isoformat(),
                                 "search_type": "company_research"
                             })
                         successful_searches += 1
                         
-                except Exception as e:
-                    print(f"        [WARN] DuckDuckGo failed for '{query}': {e}")
+                    except Exception as e:
+                        print(f"        [WARN] Google search failed for '{query}': {e}")
                 
-                # Try Google as backup (with longer delay)
-                try:
-                    sleep(random.uniform(2.0, 4.0))  # Longer delay for Google
-                    google_results_gen = google_search(query, num_results=num_results, sleep_interval=2)
-                    for url in google_results_gen:
-                        category_results.append({
-                            "source": "Google",
-                            "query": query,
-                            "title": "N/A (Google search)",
-                            "link": url,
-                            "snippet": "N/A (Google search)",
-                            "timestamp": pd.Timestamp.now().isoformat(),
-                            "search_type": "company_research"
-                        })
-                    successful_searches += 1
-                    
-                except Exception as e:
-                    print(f"        [WARN] Google search failed for '{query}': {e}")
-            
-            # Store results for this query type
-            intelligence_report[f"{category}_intelligence"][query_type] = category_results
-    
-    # Update metadata
-    intelligence_report["search_metadata"]["total_queries"] = total_queries
-    intelligence_report["search_metadata"]["successful_searches"] = successful_searches
-    
-    print(f"  [ENRICH] Completed {total_queries} queries with {successful_searches} successful searches")
-    
-    if prospect_results_found:
-        print(f"  [ENRICH] 🎯 SUCCESS: Found prospect-specific intelligence with {len(prospect_results)} results")
-        print(f"  [ENRICH] 📊 Strategy: Prospect + Company Name (Primary) + Company Research (Fallback)")
-    else:
-        print(f"  [ENRICH] 📊 Strategy: Company Research Only (No prospect-specific results found)")
-    
-    return intelligence_report
+                # Store results for this query type
+                intelligence_report[f"{category}_intelligence"][query_type] = category_results
+        
+        # Update metadata
+        intelligence_report["search_metadata"]["total_queries"] = total_queries
+        intelligence_report["search_metadata"]["successful_searches"] = successful_searches
+        
+        print(f"  [ENRICH] ✅ FAST search completed: {total_queries} queries with {successful_searches} successful searches")
+        
+        if prospect_results_found:
+            print(f"  [ENRICH] 🎯 SUCCESS: Found prospect-specific intelligence with {len(prospect_results)} results")
+            print(f"  [ENRICH] 📊 Strategy: FAST Prospect + Company Name → Industry Detection → Company Research")
+        else:
+            print(f"  [ENRICH] 📊 Strategy: FAST Company Research Only (No prospect-specific results found)")
+        
+        return intelligence_report
+        
+    except Exception as e:
+        print(f"  [ERROR] Critical error in perform_enhanced_web_searches: {e}")
+        # Return partial results if available
+        intelligence_report["error"] = str(e)
+        intelligence_report["search_metadata"]["error"] = str(e)
+        return intelligence_report
 
 # --- Enhanced Orchestrator Function ---
 
 def enrich_lead(lead_series: pd.Series):
     """
-    Orchestrates the enhanced enrichment process with Gemini AI industry detection.
+    Orchestrates the enhanced enrichment process with integrated industry detection.
+    NEW FLOW: Prospect searches → Industry detection → Company research with context.
     
     Args:
         lead_series (pd.Series): A single row from the leads DataFrame.
@@ -499,33 +652,22 @@ def enrich_lead(lead_series: pd.Series):
     prospect_phone = lead_series.get('Prospect_Phone', 'N/A')
     prospect_email = lead_series.get('Prospect_Email', 'N/A')
     
-    print(f"\n--- Enhanced Enrichment with AI Industry Detection for Lead: {prospect_name} at {company_name} ---")
+    print(f"\n--- Enhanced Enrichment with Integrated Industry Detection for Lead: {prospect_name} at {company_name} ---")
     
     if prospect_name == 'N/A' or company_name == 'N/A':
         print("  [ERROR] Lead is missing Prospect_Name or Company_Name. Skipping enrichment.")
         return {"error": "Missing critical lead information."}
 
     try:
-        # Step 1: Industry Detection with Gemini AI
-        print("  [ENRICH] Step 1: Detecting industry using Gemini AI...")
-        industry_search_results = perform_industry_detection_search(company_name, prospect_phone, prospect_email)
+        # NEW FLOW: All-in-one enhanced search with integrated industry detection
+        print("  [ENRICH] Starting integrated enrichment process...")
+        intelligence_report = perform_enhanced_web_searches(company_name, prospect_name)
         
-        if industry_search_results:
-            detected_industry = detect_industry_with_gemini(company_name, industry_search_results)
-        else:
-            detected_industry = "Unknown (No search results)"
-        
-        print(f"  [ENRICH] Industry detection complete: {detected_industry}")
-        
-        # Step 2: Comprehensive Research using detected industry
-        print("  [ENRICH] Step 2: Performing comprehensive research...")
-        intelligence_report = perform_enhanced_web_searches(company_name, prospect_name, detected_industry)
-        
-        # Add lead metadata including detected industry
+        # Add lead metadata
         intelligence_report["lead_metadata"] = {
             "prospect_name": prospect_name,
             "company_name": company_name,
-            "detected_industry": detected_industry,
+            "detected_industry": intelligence_report["search_metadata"].get("industry", "Unknown"),
             "prospect_phone": prospect_phone,
             "prospect_email": prospect_email,
             "enrichment_timestamp": pd.Timestamp.now().isoformat()
@@ -533,13 +675,13 @@ def enrich_lead(lead_series: pd.Series):
         
         # Add industry detection results
         intelligence_report["industry_detection"] = {
-            "detected_industry": detected_industry,
-            "search_results_analyzed": len(industry_search_results),
-            "detection_method": "Gemini AI analysis of search results"
+            "detected_industry": intelligence_report["search_metadata"].get("industry", "Unknown"),
+            "detection_method": "Integrated with prospect search results",
+            "detected_from_prospect_results": intelligence_report["search_metadata"].get("industry_detected_from_prospect_results", False)
         }
         
-        print("--- Enhanced Enrichment with AI Industry Detection Complete ---")
-        print(f"  -> Detected Industry: {detected_industry}")
+        print("--- Enhanced Enrichment with Integrated Industry Detection Complete ---")
+        print(f"  -> Detected Industry: {intelligence_report['search_metadata'].get('industry', 'Unknown')}")
         
         # Report on prospect-specific intelligence
         if intelligence_report.get("prospect_specific_intelligence"):
@@ -548,6 +690,12 @@ def enrich_lead(lead_series: pd.Series):
             print(f"  -> 📊 Search strategy: {prospect_data.get('search_strategy', 'Unknown')}")
         else:
             print(f"  -> ❌ No prospect-specific intelligence found")
+        
+        # Report on industry detection method
+        if intelligence_report["search_metadata"].get("industry_detected_from_prospect_results"):
+            print(f"  -> 🎯 Industry detected from prospect search results")
+        else:
+            print(f"  -> 📊 Industry detected from basic company searches")
         
         print(f"  -> Company intelligence: {len(intelligence_report.get('company_intelligence', {}))} categories")
         print(f"  -> Industry intelligence: {len(intelligence_report.get('industry_intelligence', {}))} categories")
