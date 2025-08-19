@@ -14,6 +14,7 @@ import enrichment
 import synthesis
 import dispatch
 print("Script is starting...")
+
 # --- Logging & Directory Configuration ---
 def setup_logging():
     """Ensures the 'logs' directory exists and configures logging."""
@@ -30,6 +31,35 @@ def setup_logging():
             logging.StreamHandler()
         ]
     )
+
+def get_user_approval(lead_info, email_content):
+    """
+    Prompts user to approve or skip an email before sending.
+    
+    Args:
+        lead_info: The lead data from the spreadsheet
+        email_content: The generated email content from synthesis
+    
+    Returns:
+        str: 'approve' or 'skip'
+    """
+    print(f"\n{'='*80}")
+    print(f"REVIEW EMAIL FOR: {lead_info.get('Prospect_Name', 'N/A')} at {lead_info.get('Company_Name', 'N/A')}")
+    print(f"{'='*80}")
+    print(f"Subject: {email_content.get('Selected_Email_Subject', 'N/A')}")
+    print(f"\nEmail Body:")
+    print(f"{email_content.get('Selected_Email_Body', 'N/A')}")
+    print(f"\n{'='*80}")
+    
+    while True:
+        choice = input("\nWhat would you like to do?\n1. Approve & Send\n2. Skip this lead\nEnter choice (1 or 2): ").strip()
+        
+        if choice == '1':
+            return 'approve'
+        elif choice == '2':
+            return 'skip'
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
 
 def get_column_map(worksheet):
     """Reads the header row and returns a dictionary mapping column names to indices."""
@@ -92,27 +122,40 @@ def run_pipeline():
             if "error" in outreach_assets:
                 raise ValueError(f"Synthesis failed: {outreach_assets['error']}")
 
-            email_sent = dispatch.send_email(
-                recipient_email=lead.get('Prospect_Email'),
-                subject=outreach_assets.get('Selected_Email_Subject'),
-                body=outreach_assets.get('Selected_Email_Body')
-            )
+            # --- NEW: Get User Approval Before Sending ---
+            approval_result = get_user_approval(lead, outreach_assets)
+            
+            if approval_result == 'skip':
+                # Update status to 'Skipped' and continue to next lead
+                worksheet.update_cell(row_num, col_map['Status'], "Skipped")
+                logging.info(f"Lead {prospect_name} was skipped by user.")
+                continue
+            
+            elif approval_result == 'approve':
+                # User approved - proceed with sending email
+                logging.info(f"Email approved for {prospect_name}. Sending...")
+                
+                email_sent = dispatch.send_email(
+                    recipient_email=lead.get('Prospect_Email'),
+                    subject=outreach_assets.get('Selected_Email_Subject'),
+                    body=outreach_assets.get('Selected_Email_Body')
+                )
 
-            if not email_sent:
-                raise ConnectionError("Dispatch failed. Check dispatch logs for details.")
+                if not email_sent:
+                    raise ConnectionError("Dispatch failed. Check dispatch logs for details.")
 
-            # --- Efficient Batch Update ---
-            # Prepare all cell updates for this lead
-            cells_to_update = [
-                gspread.Cell(row_num, col_map['Status'], "Sent"),
-                gspread.Cell(row_num, col_map['Prospect_Title'], outreach_assets.get('Prospect_Title', '')),
-                gspread.Cell(row_num, col_map['Halbert_Hook'], outreach_assets.get('Halbert_Hook', '')),
-                gspread.Cell(row_num, col_map['Capital_Need_Hypothesis'], outreach_assets.get('Capital_Need_Hypothesis', '')),
-                gspread.Cell(row_num, col_map['Selected_Email_Subject'], outreach_assets.get('Selected_Email_Subject', '')),
-                gspread.Cell(row_num, col_map['Selected_Email_Body'], outreach_assets.get('Selected_Email_Body', ''))
-            ]
-            worksheet.update_cells(cells_to_update)
-            logging.info(f"Successfully processed and sent email to {prospect_name}. Sheet updated.")
+                # --- Efficient Batch Update ---
+                # Prepare all cell updates for this lead
+                cells_to_update = [
+                    gspread.Cell(row_num, col_map['Status'], "Sent"),
+                    gspread.Cell(row_num, col_map['Prospect_Title'], outreach_assets.get('Prospect_Title', '')),
+                    gspread.Cell(row_num, col_map['Halbert_Hook'], outreach_assets.get('Halbert_Hook', '')),
+                    gspread.Cell(row_num, col_map['Capital_Need_Hypothesis'], outreach_assets.get('Capital_Need_Hypothesis', '')),
+                    gspread.Cell(row_num, col_map['Selected_Email_Subject'], outreach_assets.get('Selected_Email_Subject', '')),
+                    gspread.Cell(row_num, col_map['Selected_Email_Body'], outreach_assets.get('Selected_Email_Body', ''))
+                ]
+                worksheet.update_cells(cells_to_update)
+                logging.info(f"Successfully processed and sent email to {prospect_name}. Sheet updated.")
 
         except Exception as e:
             error_message = f"Failed: {e}"
