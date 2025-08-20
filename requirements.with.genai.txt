@@ -1,0 +1,26 @@
+#requirements.txt
+#List of Python packages needed to run the dossier and outreach pipeline.
+#To install all dependencies, run: pip install -r requirements.txt
+#v2_2025-08-18: Pinned versions for stability and reproducibility.
+#--- Core Dependencies ---
+#By pinning versions, we ensure that the script will always run with these
+#specific library versions, preventing unexpected errors from future updates.
+#For interacting with Google Sheets
+gspread==5.12.4
+google-auth==2.29.0 # Handles authentication for Google services
+
+#For data manipulation
+pandas>=2.1.0
+
+#For web search and intelligence gathering
+duckduckgo-search==5.3.1b1
+googlesearch-python==1.2.3
+
+#For interacting with the Gemini LLM
+google-generativeai==0.5.4
+
+#For loading environment variables from the .env file
+python-dotenv==1.0.1
+
+# For Gemini API (new SDK) & Google Search grounding
+google-genai>=1.0.0

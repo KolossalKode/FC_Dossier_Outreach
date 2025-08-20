@@ -1,16 +1,18 @@
-# main.py
-# The orchestrator that runs the entire dossier and outreach pipeline.
-# v2_2025-08-18: Refactored for dynamic columns and efficient batch updates.
+# main_alt.py
+# An alternative orchestrator to test the enrichment_alt.py module.
+# v2_2025-08-20: Modified to call the new deep research module.
 
 import os
 import logging
+import json
 from time import sleep
 import gspread
 
 # Import individual modules of the pipeline
 import config
 import ingestion
-import enrichment_alt as enrichment
+# --- CHANGE 1: Import the new enrichment module under the original alias ---
+import enrichment_alt as enrichment 
 import synthesis
 import dispatch
 print("Script is starting...")
@@ -114,7 +116,14 @@ def run_pipeline():
         try:
             worksheet.update_cell(row_num, col_map['Status'], "Processing...")
 
-            intelligence_report = enrichment.enrich_lead(lead)
+            # --- FIX: Removed the 'industry' argument from the function call ---
+            intelligence_report = enrichment.gather_osint( # type: ignore
+                company_name=lead.get('Company_Name'),
+                prospect_name=lead.get('Prospect_Name'),
+                prospect_email=lead.get('Prospect_Email'),
+                prospect_phone=lead.get('Prospect_Phone'),
+            )
+            
             if "error" in intelligence_report:
                 raise ValueError(f"Enrichment failed: {intelligence_report['error']}")
 
@@ -122,17 +131,15 @@ def run_pipeline():
             if "error" in outreach_assets:
                 raise ValueError(f"Synthesis failed: {outreach_assets['error']}")
 
-            # --- NEW: Get User Approval Before Sending ---
+            # --- Get User Approval Before Sending ---
             approval_result = get_user_approval(lead, outreach_assets)
             
             if approval_result == 'skip':
-                # Update status to 'Skipped' and continue to next lead
                 worksheet.update_cell(row_num, col_map['Status'], "Skipped")
                 logging.info(f"Lead {prospect_name} was skipped by user.")
                 continue
             
             elif approval_result == 'approve':
-                # User approved - proceed with sending email
                 logging.info(f"Email approved for {prospect_name}. Sending...")
                 
                 email_sent = dispatch.send_email(
@@ -145,7 +152,6 @@ def run_pipeline():
                     raise ConnectionError("Dispatch failed. Check dispatch logs for details.")
 
                 # --- Efficient Batch Update ---
-                # Prepare all cell updates for this lead
                 cells_to_update = [
                     gspread.Cell(row_num, col_map['Status'], "Sent"),
                     gspread.Cell(row_num, col_map['Prospect_Title'], outreach_assets.get('Prospect_Title', '')),
@@ -154,16 +160,22 @@ def run_pipeline():
                     gspread.Cell(row_num, col_map['Selected_Email_Subject'], outreach_assets.get('Selected_Email_Subject', '')),
                     gspread.Cell(row_num, col_map['Selected_Email_Body'], outreach_assets.get('Selected_Email_Body', ''))
                 ]
+                
+                # If a column exists for the full dossier, save it.
+                if 'Dossier_JSON' in col_map:
+                    cells_to_update.append(
+                        gspread.Cell(row_num, col_map['Dossier_JSON'], json.dumps(intelligence_report, indent=2))
+                    )
                 worksheet.update_cells(cells_to_update)
                 logging.info(f"Successfully processed and sent email to {prospect_name}. Sheet updated.")
 
         except Exception as e:
             error_message = f"Failed: {e}"
             logging.error(f"Error processing lead {prospect_name}: {error_message}", exc_info=True)
-            worksheet.update_cell(row_num, col_map['Status'], error_message[:499]) # Limit error msg length for cell
+            worksheet.update_cell(row_num, col_map['Status'], error_message[:499])
         
         finally:
-            sleep(5) # Delay to respect API rate limits
+            sleep(5)
 
     logging.info("--- Pipeline run has completed. ---")
 
