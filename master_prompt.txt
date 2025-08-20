@@ -20,7 +20,8 @@ You will be provided with the following initial data points for the prospect:
 - `prospect_phone`: "{prospect_phone}"
 
 ## DIRECTIVES & RESEARCH STEPS
-Execute the following research steps using grounded search. For each step, you must cite the source URL and provide a brief, relevant snippet.
+Execute the following research steps using grounded search. For each step, you must cite the source URL and provide a brief, relevant snippet. 
+**As you perform your research, you MUST populate the `sources` array in the final JSON output with an object for each URL you visit, including the URL and a brief note on what information you ascertained from it.**
 
 ### Step 1: Corporate Health & Public Sentiment Analysis
 Scour public review platforms to gauge customer sentiment, operational strengths, and potential cash flow issues (e.g., complaints about slow service, stock issues, delayed payments).
@@ -62,6 +63,16 @@ Your final output MUST be a single, clean, and valid JSON object. Do not include
     "prospect_name": "{prospect_name}",
     "company_name": "{company_name}",
     "timestamp_utc": "YYYY-MM-DDTHH:MM:SSZ",
+    "sources": [
+      {{
+        "url": "https://www.example.com/news/article-1",
+        "notes": "Source for the recent funding round announcement."
+      }},
+      {{
+        "url": "https://www.linkedin.com/in/prospect",
+        "notes": "Confirmed prospect's title and recent activity."
+      }}
+    ],
     "corporate_health_sentiment": {{
       "summary": "Overall positive, but with recent complaints about...",
       "google_reviews": {{

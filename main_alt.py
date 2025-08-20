@@ -107,8 +107,12 @@ def run_pipeline():
 
     logging.info(f"--- Processing {len(leads_df)} new leads ---")
 
+    # --- NEW: Batching control variables ---
+    BATCH_SIZE = 10  # Process 10 leads at a time
+    processed_in_batch = 0
+
     for index, lead in leads_df.iterrows():
-        row_num = index + 2 
+        row_num = index + 2
         prospect_name = lead.get('Prospect_Name', 'N/A')
         
         logging.info(f"--- Processing Lead #{row_num-1}: {prospect_name} ---")
@@ -131,12 +135,33 @@ def run_pipeline():
             if "error" in outreach_assets:
                 raise ValueError(f"Synthesis failed: {outreach_assets['error']}")
 
-            # --- Get User Approval Before Sending ---
+            # --- Get User Approval ---
             approval_result = get_user_approval(lead, outreach_assets)
             
+            # --- Prepare data for sheet update (dossier and assets) ---
+            # This data will be saved whether the email is sent or skipped.
+            cells_to_update = [
+                gspread.Cell(row_num, col_map['Prospect_Title'], outreach_assets.get('Prospect_Title', '')),
+                gspread.Cell(row_num, col_map['Halbert_Hook'], outreach_assets.get('Halbert_Hook', '')),
+                gspread.Cell(row_num, col_map['Capital_Need_Hypothesis'], outreach_assets.get('Capital_Need_Hypothesis', '')),
+                gspread.Cell(row_num, col_map['Selected_Email_Subject'], outreach_assets.get('Selected_Email_Subject', '')),
+                gspread.Cell(row_num, col_map['Selected_Email_Body'], outreach_assets.get('Selected_Email_Body', ''))
+            ]
+            if 'Dossier_JSON' in col_map:
+                cells_to_update.append(
+                    gspread.Cell(row_num, col_map['Dossier_JSON'], json.dumps(intelligence_report, indent=2))
+                )
+            if 'Sources' in col_map:
+                # Safely extract the sources list from the dossier
+                sources_data = intelligence_report.get('dossier', {}).get('sources', [])
+                cells_to_update.append(
+                    gspread.Cell(row_num, col_map['Sources'], json.dumps(sources_data, indent=2))
+                )
+
             if approval_result == 'skip':
-                worksheet.update_cell(row_num, col_map['Status'], "Skipped")
-                logging.info(f"Lead {prospect_name} was skipped by user.")
+                cells_to_update.append(gspread.Cell(row_num, col_map['Status'], "Skipped"))
+                worksheet.update_cells(cells_to_update)
+                logging.info(f"Lead {prospect_name} was skipped by user. Dossier saved.")
                 continue
             
             elif approval_result == 'approve':
@@ -151,21 +176,8 @@ def run_pipeline():
                 if not email_sent:
                     raise ConnectionError("Dispatch failed. Check dispatch logs for details.")
 
-                # --- Efficient Batch Update ---
-                cells_to_update = [
-                    gspread.Cell(row_num, col_map['Status'], "Sent"),
-                    gspread.Cell(row_num, col_map['Prospect_Title'], outreach_assets.get('Prospect_Title', '')),
-                    gspread.Cell(row_num, col_map['Halbert_Hook'], outreach_assets.get('Halbert_Hook', '')),
-                    gspread.Cell(row_num, col_map['Capital_Need_Hypothesis'], outreach_assets.get('Capital_Need_Hypothesis', '')),
-                    gspread.Cell(row_num, col_map['Selected_Email_Subject'], outreach_assets.get('Selected_Email_Subject', '')),
-                    gspread.Cell(row_num, col_map['Selected_Email_Body'], outreach_assets.get('Selected_Email_Body', ''))
-                ]
-                
-                # If a column exists for the full dossier, save it.
-                if 'Dossier_JSON' in col_map:
-                    cells_to_update.append(
-                        gspread.Cell(row_num, col_map['Dossier_JSON'], json.dumps(intelligence_report, indent=2))
-                    )
+                # Add the final status and update the sheet
+                cells_to_update.append(gspread.Cell(row_num, col_map['Status'], "Sent"))
                 worksheet.update_cells(cells_to_update)
                 logging.info(f"Successfully processed and sent email to {prospect_name}. Sheet updated.")
 
@@ -176,6 +188,19 @@ def run_pipeline():
         
         finally:
             sleep(5)
+            # --- NEW: Check if batch is complete ---
+            processed_in_batch += 1
+            is_last_lead = (index == leads_df.index[-1])
+            if processed_in_batch % BATCH_SIZE == 0 and not is_last_lead:
+                logging.info(f"--- Completed a batch of {BATCH_SIZE}. ---")
+                while True:
+                    continue_choice = input("Continue with the next batch? (y/n): ").strip().lower()
+                    if continue_choice in ['y', 'yes']:
+                        break
+                    elif continue_choice in ['n', 'no']:
+                        logging.info("User chose to stop. Pipeline run finishing early.")
+                        return  # Exit the entire function
+
 
     logging.info("--- Pipeline run has completed. ---")
 

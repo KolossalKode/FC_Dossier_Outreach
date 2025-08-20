@@ -108,6 +108,7 @@ Ensure your Google Sheet has the following columns. The script dynamically finds
 *   `Capital_Need_Hypothesis` (Will be populated by the script)
 *   `Selected_Email_Subject` (Will be populated by the script)
 *   `Selected_Email_Body` (Will be populated by the script)
+*   `Sources` (Optional: Will be populated with a JSON array of research sources if the column exists)
 *   `Dossier_JSON` (Optional: Will be populated with the full raw intelligence report if the column exists)
 
 ---
