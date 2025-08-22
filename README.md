@@ -58,8 +58,21 @@ It is highly recommended to use a Python virtual environment.
 
 ```bash
 # Create and activate a virtual environment (optional but recommended)
-python -m venv .venv
-source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+python -m venv .venv 
+
+# After creating the environment, verify that the activation scripts exist.
+# For example, on PowerShell, run `ls .\.venv\Scripts` and you should see `Activate.ps1`.
+# If not, the environment creation failed. Delete the `.venv` directory and try again.
+# `rm -r .venv -Force`
+
+# --- Activate the virtual environment ---
+# On macOS/Linux (bash/zsh):
+source .venv/bin/activate
+# On Windows (PowerShell):
+# Note: You must "dot-source" the script to activate it in your current shell.
+. .\.venv\Scripts\Activate.ps1
+# On Windows (Command Prompt):
+.venv\Scripts\activate.bat
 
 # Install required packages
 pip install -r requirements.txt

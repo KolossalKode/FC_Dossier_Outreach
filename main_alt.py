@@ -90,6 +90,25 @@ def run_pipeline():
     if leads_df.empty:
         logging.info("No new leads to process. Pipeline run complete.")
         return
+
+    # --- NEW: Ask user for the batch size ---
+    try:
+        total_leads = len(leads_df)
+        prompt = (
+            f"Found {total_leads} new leads. How many would you like to process in this batch? "
+            f"(Enter a number or 'all'): "
+        )
+        batch_size_str = input(prompt).strip().lower()
+        if batch_size_str == 'all':
+            batch_size = total_leads
+        else:
+            batch_size = int(batch_size_str)
+
+        # Slice the DataFrame to the requested batch size
+        leads_df = leads_df.head(batch_size)
+    except (ValueError, TypeError):
+        logging.error("Invalid input. Please enter a number or 'all'. Exiting.")
+        return
         
     try:
         spreadsheet = gspread_client.open(config.GOOGLE_SHEET_NAME)
@@ -106,10 +125,6 @@ def run_pipeline():
         return
 
     logging.info(f"--- Processing {len(leads_df)} new leads ---")
-
-    # --- NEW: Batching control variables ---
-    BATCH_SIZE = 10  # Process 10 leads at a time
-    processed_in_batch = 0
 
     for index, lead in leads_df.iterrows():
         row_num = index + 2
@@ -188,19 +203,6 @@ def run_pipeline():
         
         finally:
             sleep(5)
-            # --- NEW: Check if batch is complete ---
-            processed_in_batch += 1
-            is_last_lead = (index == leads_df.index[-1])
-            if processed_in_batch % BATCH_SIZE == 0 and not is_last_lead:
-                logging.info(f"--- Completed a batch of {BATCH_SIZE}. ---")
-                while True:
-                    continue_choice = input("Continue with the next batch? (y/n): ").strip().lower()
-                    if continue_choice in ['y', 'yes']:
-                        break
-                    elif continue_choice in ['n', 'no']:
-                        logging.info("User chose to stop. Pipeline run finishing early.")
-                        return  # Exit the entire function
-
 
     logging.info("--- Pipeline run has completed. ---")
 

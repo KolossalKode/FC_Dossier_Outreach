@@ -17,7 +17,8 @@ duckduckgo-search==5.3.1b1
 googlesearch-python==1.2.3
 
 #For interacting with the Gemini LLM
-google-generativeai==0.5.4
+# Use a newer version for access to the latest models like gemini-1.5-pro
+google-generativeai>=1.0.0
 
 #For loading environment variables from the .env file
 python-dotenv==1.0.1
