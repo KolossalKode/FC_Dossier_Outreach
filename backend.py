@@ -110,13 +110,31 @@ def load_master_prompt() -> str:
     except FileNotFoundError:
         raise FileNotFoundError("Backend ERROR: 'master_prompt.txt' not found in the project directory.")
 
+def load_direct_marketing_samples() -> str:
+    """Load direct marketing samples from 'direct_marketing_samples.txt'."""
+    try:
+        with open("direct_marketing_samples.txt", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        print("Backend WARNING: 'direct_marketing_samples.txt' not found. Proceeding without it.")
+        return ""
+
+def load_successful_emails() -> str:
+    """Load successful email templates from 'successful_emails.txt'."""
+    try:
+        with open("successful_emails.txt", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        print("Backend WARNING: 'successful_emails.txt' not found. Proceeding without it.")
+        return ""
+
 def _extract_sources_from_grounding(response) -> List[Dict[str, str]]:
     """
     Extract grounded web sources from response.candidates[0].grounding_metadata.grounding_chunks.
     Returns [{'title': str, 'uri': str}, ...] if present, else [].
     """
     try:
-        if not response or not getattr(response, "candidates", None):
+        if not response or not hasattr(response, "candidates") or not response.candidates:
             return []
         cand = response.candidates[0]
         gm = getattr(cand, "grounding_metadata", None)
@@ -197,8 +215,18 @@ def gather_osint(company_name: str, prospect_name: str, prospect_email: str, pro
 # Synthesis (email + dossier condensation)
 # ──────────────────────────────────────────────────────────────────────────────
 MASTER_SYNTHESIS_PROMPT = """
-Act as a world-class business intelligence analyst and a direct-response copywriter in the style of Gary Halbert.
-Based ONLY on the structured 'Raw Intelligence Report' provided below, generate a concise prospect dossier and a compelling outreach email. Ground all outputs in the provided data. Do not invent facts.
+Act as a world-class business intelligence analyst and a direct-response copywriter.
+Your task is to generate a concise prospect dossier and a compelling outreach email based ONLY on the provided 'Raw Intelligence Report'.
+
+**Exemplary Sales Letters for Stylistic and Tonal Reference:**
+```
+{marketing_samples}
+```
+
+**Proven Email Structures (Examples of successful emails):**
+```
+{successful_emails}
+```
 
 **Raw Intelligence Report:**
 ```json
@@ -236,11 +264,18 @@ def create_outreach_assets(intelligence_report: Dict[str, Any], prospect_name: s
     if not intelligence_report or ("error" in intelligence_report):
         return {"error": f"Invalid intelligence report received: {intelligence_report.get('error', 'N/A')}"}
 
+    # Load the new context files
+    marketing_samples = load_direct_marketing_samples()
+    successful_emails = load_successful_emails()
     first_name = extract_first_name(prospect_name)
 
     try:
         report_str = json.dumps(intelligence_report, indent=2)
-        prompt = MASTER_SYNTHESIS_PROMPT.format(intelligence_report=report_str)
+        prompt = MASTER_SYNTHESIS_PROMPT.format(
+            intelligence_report=report_str,
+            marketing_samples=marketing_samples,
+            successful_emails=successful_emails
+        )
 
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
