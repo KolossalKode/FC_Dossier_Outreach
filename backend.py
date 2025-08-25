@@ -1,69 +1,75 @@
 # backend.py
-# v2_2025-08-22: Improved error handling to raise exceptions for Streamlit UI.
+# v3_2025-08-25: Switch to google-genai SDK + proper Google Search grounding (Gemini 2.5).
+# - Replaces deprecated google.generativeai usage that caused AttributeError: 'Tool'
+# - Keeps all public function signatures used by app.py intact.
 
 import os
 import json
 import smtplib
 import ssl
 from email.message import EmailMessage
+from typing import Dict, Any, List
 
 import gspread
 import pandas as pd
-import google.generativeai as genai
 from google.oauth2.service_account import Credentials
-from google.generativeai.types import GenerationConfig
+
+# ── New: Google GenAI SDK (GA) ────────────────────────────────────────────────
+# Docs: https://ai.google.dev/gemini-api/docs/libraries
+# Grounding tool usage: https://ai.google.dev/gemini-api/docs/google-search
+from google import genai
+from google.genai import types
 
 # --- Configuration Loading ---
-# This assumes you have a config.py file and a .env file set up correctly
 import config
 
-# --- Gemini API Configuration ---
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Gemini / GenAI client
+# ──────────────────────────────────────────────────────────────────────────────
+GENAI_CLIENT = None
+MODEL_ID = getattr(config, "GEMINI_MODEL_ID", "gemini-2.5-pro")  # 2.5 Pro supports Search grounding
+
 try:
-    if not config.GEMINI_API_KEY:
+    if not getattr(config, "GEMINI_API_KEY", None):
         raise ValueError("GEMINI_API_KEY not found in config or .env file.")
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    # Standardize on the more powerful model used in other modules
-    gemini_model = genai.GenerativeModel('gemini-2.5-pro')
-    print("Backend: Gemini API configured successfully.")
+    # Use Developer API with API key (works with Search tool)
+    GENAI_CLIENT = genai.Client(api_key=config.GEMINI_API_KEY)
+    print("Backend: GenAI client configured (google-genai).")
 except Exception as e:
-    # This initial configuration error is critical, so we'll keep the print statement
-    # as it happens on startup, before Streamlit might be fully running.
-    print(f"Backend Error: Could not configure Gemini API: {e}")
-    gemini_model = None
+    print(f"Backend Error: Could not configure GenAI client: {e}")
 
-# --- Module 1: Ingestion Logic (from ingestion.py) ---
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Google Sheets (Ingestion)
+# ──────────────────────────────────────────────────────────────────────────────
 SCOPES = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
 ]
 
 def authenticate_gspread():
     """
     Authenticates with Google Sheets using credentials from config.
-    V2 CHANGE: Raises exceptions on failure for the UI to catch.
+    Raises exceptions for the Streamlit UI to surface.
     """
     try:
         creds_json_str = config.GCP_SERVICE_ACCOUNT_JSON
         if not creds_json_str:
-            # Raise an exception that the Streamlit app can display
             raise ValueError("Backend Error: GCP_SERVICE_ACCOUNT_JSON not found in config. Please check your .env file.")
-        
+
         creds_dict = json.loads(creds_json_str)
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         gc = gspread.authorize(creds)
         print("Backend: Google Sheets authentication successful.")
         return gc
     except json.JSONDecodeError:
-        # Raise a specific error for invalid JSON
-        raise ValueError("Backend Error: GCP_SERVICE_ACCOUNT_JSON is not valid JSON. Please ensure it's a single, correctly formatted line in your .env file.")
+        raise ValueError("Backend Error: GCP_SERVICE_ACCOUNT_JSON is not valid JSON. Ensure single-line, valid JSON in .env.")
     except Exception as e:
-        # Re-raise other exceptions to be caught by the UI
-        raise ConnectionError(f"Backend Error: An unexpected error occurred during Google Sheets authentication: {e}")
+        raise ConnectionError(f"Backend Error: Unexpected error during Google Sheets authentication: {e}")
 
-
-def get_new_leads(gc: gspread.Client):
-    """Fetches new leads from the Google Sheet specified in config."""
+def get_new_leads(gc: gspread.Client) -> pd.DataFrame:
+    """Fetch new leads from the Google Sheet specified in config."""
     sheet_name = config.GOOGLE_SHEET_NAME
     if not sheet_name:
         raise ValueError("Backend Error: GOOGLE_SHEET_NAME is not set in config.")
@@ -75,66 +81,121 @@ def get_new_leads(gc: gspread.Client):
             return pd.DataFrame()
 
         df = pd.DataFrame(all_records)
-        if 'Status' not in df.columns:
-            return df # Return all if no Status column
-        
-        new_leads_df = df[df['Status'].astype(str).str.strip().isin(['', 'New', 'new'])].copy()
+        if "Status" not in df.columns:
+            return df  # Return all if no Status column
+
+        new_leads_df = df[df["Status"].astype(str).str.strip().isin(["", "New", "new"])].copy()
         return new_leads_df
     except Exception as e:
-        raise IOError(f"Backend Error: An unexpected error occurred while fetching leads: {e}")
+        raise IOError(f"Backend Error: Unexpected error while fetching leads: {e}")
 
-def get_column_map(worksheet):
-    """Reads the header row and returns a dictionary mapping column names to indices."""
+def get_column_map(worksheet) -> Dict[str, int]:
+    """Read the header row and return a dict mapping column names to indices (1-based)."""
     try:
         headers = worksheet.row_values(1)
         return {header: i + 1 for i, header in enumerate(headers)}
     except Exception as e:
         raise IOError(f"Backend Error: Failed to read header row from sheet: {e}")
 
-# --- Module 2: Enrichment Logic (from enrichment_alt.py) ---
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Enrichment (OSINT) with Google Search grounding
+# ──────────────────────────────────────────────────────────────────────────────
 
 def load_master_prompt() -> str:
-    """Loads the deep research prompt from the 'master_prompt.txt' file."""
+    """Load the deep research prompt from 'master_prompt.txt'."""
     try:
-        with open('master_prompt.txt', 'r') as f:
+        with open("master_prompt.txt", "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        # Raise an exception so the UI can report the missing file
         raise FileNotFoundError("Backend ERROR: 'master_prompt.txt' not found in the project directory.")
 
-def gather_osint(company_name: str, prospect_name: str, prospect_email: str, prospect_phone: str) -> dict:
-    """Performs deep research on a prospect using the Gemini API."""
-    if not gemini_model:
-        return {"error": "Gemini model is not configured."}
+def _extract_sources_from_grounding(response) -> List[Dict[str, str]]:
+    """
+    Extract grounded web sources from response.candidates[0].grounding_metadata.grounding_chunks.
+    Returns [{'title': str, 'uri': str}, ...] if present, else [].
+    """
+    try:
+        if not response or not getattr(response, "candidates", None):
+            return []
+        cand = response.candidates[0]
+        gm = getattr(cand, "grounding_metadata", None)
+        if not gm:
+            return []
+        sources = []
+        for ch in getattr(gm, "grounding_chunks", []) or []:
+            web = getattr(ch, "web", None)
+            if web and getattr(web, "uri", None):
+                sources.append({
+                    "title": getattr(web, "title", "") or "",
+                    "uri": getattr(web, "uri", ""),
+                })
+        return sources
+    except Exception:
+        return []
+
+def gather_osint(company_name: str, prospect_name: str, prospect_email: str, prospect_phone: str) -> Dict[str, Any]:
+    """
+    Perform deep research on a prospect using Gemini 2.5 with Google Search grounding.
+    Returns a dict parsed from model JSON and augments with 'dossier.sources' from grounding metadata (if present).
+    """
+    if GENAI_CLIENT is None:
+        return {"error": "GenAI client is not configured. Check GEMINI_API_KEY and google-genai installation."}
 
     master_prompt = load_master_prompt()
-    # No need to check for empty prompt here, as load_master_prompt now raises an error
-
     formatted_prompt = master_prompt.format(
-        prospect_name=prospect_name,
-        company_name=company_name,
-        prospect_email=prospect_email,
-        prospect_phone=prospect_phone
+        prospect_name=prospect_name or "",
+        company_name=company_name or "",
+        prospect_email=prospect_email or "",
+        prospect_phone=prospect_phone or "",
     )
 
     try:
-        generation_config = GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.7,
+        # Enable Google Search grounding tool (new SDK).
+        grounding_tool = types.Tool(google_search=types.GoogleSearch())
+
+        gen_config = types.GenerateContentConfig(
+            tools=[grounding_tool],
+            temperature=0.2,
         )
-        response = gemini_model.generate_content(
-            formatted_prompt,
-            generation_config=generation_config
+
+        response = GENAI_CLIENT.models.generate_content(
+            model=MODEL_ID,
+            contents=formatted_prompt,
+            config=gen_config,
         )
-        return json.loads(response.text)
+
+        # Parse model JSON
+        _resp_text = getattr(response, "text", "") or ""
+        if not _resp_text.strip():
+            # If the model returned no direct text (can happen with tool use), fall back to an empty JSON object
+            _resp_text = "{}"
+        try:
+            data = json.loads(_resp_text)
+        except Exception:
+            # Be permissive: keep the raw text so downstream synthesis can still proceed
+            data = {"dossier": {"summary": _resp_text}}
+
+        # Attach grounded sources into the expected location if present
+        sources = _extract_sources_from_grounding(response)
+        if sources:
+            if isinstance(data, dict):
+                if "dossier" in data and isinstance(data["dossier"], dict):
+                    data["dossier"].setdefault("sources", sources)
+                else:
+                    data.setdefault("dossier", {})
+                    data["dossier"].setdefault("sources", sources)
+
+        return data
+
     except Exception as e:
-        # Return a dictionary with an error key, as this happens during the main loop
-        # and we want to report it per-lead rather than crashing the whole app.
-        print(f"Backend ERROR: Gemini API call failed in gather_osint: {e}")
+        print(f"Backend ERROR: GenAI call failed in gather_osint: {e}")
         return {"error": f"LLM research failed: {e}"}
 
-# --- Module 3: Synthesis Logic (from synthesis.py) ---
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Synthesis (email + dossier condensation)
+# ──────────────────────────────────────────────────────────────────────────────
 MASTER_SYNTHESIS_PROMPT = """
 Act as a world-class business intelligence analyst and a direct-response copywriter in the style of Gary Halbert.
 Based ONLY on the structured 'Raw Intelligence Report' provided below, generate a concise prospect dossier and a compelling outreach email. Ground all outputs in the provided data. Do not invent facts.
@@ -161,41 +222,54 @@ You MUST return a single, valid JSON object with the following five keys. Do not
 """
 
 def extract_first_name(full_name: str) -> str:
-    """Extracts the first name from a full name."""
     if not full_name or not isinstance(full_name, str):
         return "there"
     return full_name.split()[0]
 
-def create_outreach_assets(intelligence_report: dict, prospect_name: str):
-    """Uses the Gemini API to generate a dossier and email."""
-    if not gemini_model:
-        return {"error": "Gemini model is not configured."}
-    if not intelligence_report or "error" in intelligence_report:
+def create_outreach_assets(intelligence_report: Dict[str, Any], prospect_name: str) -> Dict[str, Any]:
+    """
+    Generate a condensed dossier + email assets from the prior OSINT report.
+    Uses structured JSON output; no grounding tool here (synthesis only).
+    """
+    if GENAI_CLIENT is None:
+        return {"error": "GenAI client is not configured. Check GEMINI_API_KEY and google-genai installation."}
+    if not intelligence_report or ("error" in intelligence_report):
         return {"error": f"Invalid intelligence report received: {intelligence_report.get('error', 'N/A')}"}
 
     first_name = extract_first_name(prospect_name)
-    
+
     try:
         report_str = json.dumps(intelligence_report, indent=2)
         prompt = MASTER_SYNTHESIS_PROMPT.format(intelligence_report=report_str)
-        
-        generation_config = GenerationConfig(response_mime_type="application/json")
-        response = gemini_model.generate_content(prompt, generation_config=generation_config)
-        
+
+        gen_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.3,
+        )
+
+        response = GENAI_CLIENT.models.generate_content(
+            model=MODEL_ID,
+            contents=prompt,
+            config=gen_config,
+        )
+
         generated_assets = json.loads(response.text)
-        
-        if 'Selected_Email_Body' in generated_assets:
-            generated_assets['Selected_Email_Body'] = generated_assets['Selected_Email_Body'].replace("[First Name]", first_name)
-        
+
+        if "Selected_Email_Body" in generated_assets:
+            generated_assets["Selected_Email_Body"] = generated_assets["Selected_Email_Body"].replace("[First Name]", first_name)
+
         return generated_assets
     except Exception as e:
-        print(f"Backend ERROR: Gemini API call failed in create_outreach_assets: {e}")
+        print(f"Backend ERROR: GenAI call failed in create_outreach_assets: {e}")
         return {"error": f"LLM synthesis failed: {e}"}
 
-# --- Module 4: Dispatch Logic (from dispatch.py) ---
 
-def send_email(recipient_email: str, subject: str, body: str):
-    """Connects to a Google SMTP server and sends an email."""
+# ──────────────────────────────────────────────────────────────────────────────
+# Dispatch (Email)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def send_email(recipient_email: str, subject: str, body: str) -> bool:
+    """Send email via SMTP using creds from config."""
     if not all([config.SENDER_EMAIL, config.SENDER_APP_PASSWORD]):
         print("Backend Error: SENDER_EMAIL or SENDER_APP_PASSWORD not set in config.")
         return False
@@ -204,11 +278,11 @@ def send_email(recipient_email: str, subject: str, body: str):
         return False
 
     msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = config.SENDER_EMAIL
-    msg['To'] = recipient_email
-    
-    signature = f"""
+    msg["Subject"] = subject
+    msg["From"] = config.SENDER_EMAIL
+    msg["To"] = recipient_email
+
+    signature = """
 -- 
 Sincerely,
 
@@ -218,7 +292,7 @@ Growth Funding Architect
 (o)(917) 745-3378
 info@fastcapitalnyc.com
 Apply for Funding
-"""
+""".strip("\n")
     full_body = body + "\n\n" + signature
     msg.set_content(full_body)
 
@@ -233,36 +307,45 @@ Apply for Funding
         print(f"Backend ERROR: Failed to send email: {e}")
         return False
 
-# --- NEW: Google Sheet Update Function (Moved from app.py) ---
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Sheet Update
+# ──────────────────────────────────────────────────────────────────────────────
 
 def update_google_sheet(gspread_client, row_index, status, dossier, email_assets, col_map):
-    """Updates a single lead's row in the Google Sheet with the results."""
+    """Update a single lead row with results."""
     try:
         spreadsheet = gspread_client.open(config.GOOGLE_SHEET_NAME)
         worksheet = spreadsheet.sheet1
 
         cells_to_update = [
-            gspread.Cell(row_index, col_map['Status'], status),
-            gspread.Cell(row_index, col_map['Prospect_Title'], email_assets.get('Prospect_Title', '')),
-            gspread.Cell(row_index, col_map['Halbert_Hook'], email_assets.get('Halbert_Hook', '')),
-            gspread.Cell(row_index, col_map['Capital_Need_Hypothesis'], email_assets.get('Capital_Need_Hypothesis', '')),
-            gspread.Cell(row_index, col_map['Selected_Email_Subject'], email_assets.get('Selected_Email_Subject', '')),
-            gspread.Cell(row_index, col_map['Selected_Email_Body'], email_assets.get('Selected_Email_Body', ''))
+            gspread.Cell(row_index, col_map["Status"], status),
+            gspread.Cell(row_index, col_map["Prospect_Title"], email_assets.get("Prospect_Title", "")),
+            gspread.Cell(row_index, col_map["Halbert_Hook"], email_assets.get("Halbert_Hook", "")),
+            gspread.Cell(row_index, col_map["Capital_Need_Hypothesis"], email_assets.get("Capital_Need_Hypothesis", "")),
+            gspread.Cell(row_index, col_map["Selected_Email_Subject"], email_assets.get("Selected_Email_Subject", "")),
+            gspread.Cell(row_index, col_map["Selected_Email_Body"], email_assets.get("Selected_Email_Body", "")),
         ]
 
         # Safely add JSON data if the columns exist
-        if 'Dossier_JSON' in col_map:
+        if "Dossier_JSON" in col_map:
             cells_to_update.append(
-                gspread.Cell(row_index, col_map['Dossier_JSON'], json.dumps(dossier, indent=2))
+                gspread.Cell(row_index, col_map["Dossier_JSON"], json.dumps(dossier, indent=2))
             )
-        if 'Sources' in col_map:
-            sources_data = dossier.get('dossier', {}).get('sources', [])
+        if "Sources" in col_map:
+            # Prefer nested dossier.sources if present
+            sources_data = []
+            if isinstance(dossier, dict):
+                sources_data = (
+                    dossier.get("dossier", {}).get("sources")
+                    or dossier.get("sources")
+                    or []
+                )
             cells_to_update.append(
-                gspread.Cell(row_index, col_map['Sources'], json.dumps(sources_data, indent=2))
+                gspread.Cell(row_index, col_map["Sources"], json.dumps(sources_data, indent=2))
             )
 
         worksheet.update_cells(cells_to_update)
         return True, f"Successfully updated row {row_index} with status '{status}'."
     except Exception as e:
-        # Return a tuple for consistent error handling in the UI
         return False, f"Failed to update sheet: {e}"
