@@ -48,6 +48,26 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# This is the canonical list of headers the application expects to find in the Google Sheet.
+# The order defined here is the order in which they will be created if they are missing.
+REQUIRED_HEADERS = [
+    # Input columns
+    "Prospect_Name",
+    "Company_Name",
+    "Prospect_Email",
+    "Prospect_Phone",
+    # Output columns
+    "Status",
+    "Prospect_Title",
+    "Halbert_Hook",
+    "Capital_Need_Hypothesis",
+    "Selected_Email_Subject",
+    "Selected_Email_Body",
+    "Dossier_JSON",
+    "Sources"
+]
+
+
 def authenticate_gspread():
     """
     Authenticates with Google Sheets using credentials from config.
@@ -68,28 +88,66 @@ def authenticate_gspread():
     except Exception as e:
         raise ConnectionError(f"Backend Error: Unexpected error during Google Sheets authentication: {e}")
 
-def get_new_leads(gc: gspread.Client) -> pd.DataFrame:
-    """Fetch new leads from the Google Sheet specified in config."""
-    sheet_name = config.GOOGLE_SHEET_NAME
-    if not sheet_name:
-        raise ValueError("Backend Error: GOOGLE_SHEET_NAME is not set in config.")
+
+def ensure_headers(worksheet: gspread.Worksheet, headers_to_ensure: List[str]):
+    """
+    Ensures the first row of the worksheet contains all required headers.
+    If any headers are missing, they are appended to the first row.
+    Returns a tuple (success: bool, message: str).
+    """
     try:
-        spreadsheet = gc.open(sheet_name)
-        worksheet = spreadsheet.sheet1
+        # Get existing headers. gspread returns None for empty cells at the end, so filter them out.
+        existing_headers = [h for h in worksheet.row_values(1) if h]
+
+        # Use a set for efficient checking of what's already there
+        existing_headers_set = set(existing_headers)
+        missing_headers = [h for h in headers_to_ensure if h not in existing_headers_set]
+
+        if missing_headers:
+            print(f"Backend: Missing headers found: {missing_headers}. Appending them to the sheet.")
+            # The new header row is the existing one plus the new ones
+            new_header_row = existing_headers + missing_headers
+
+            # Create a list of gspread.Cell objects to update the first row
+            # This is more robust than updating a range by A1 notation.
+            cell_list = [gspread.Cell(1, i + 1, value) for i, value in enumerate(new_header_row)]
+            worksheet.update_cells(cell_list)
+
+            print("Backend: Headers updated successfully.")
+            return True, "Headers were missing and have been successfully added."
+        else:
+            print("Backend: All required headers are present.")
+            return True, "All required headers are already present."
+
+    except Exception as e:
+        error_message = f"Backend Error: Failed to ensure headers in Google Sheet: {e}"
+        print(error_message)
+        return False, error_message
+
+
+def get_new_leads(worksheet: gspread.Worksheet) -> pd.DataFrame:
+    """Fetch new leads from the provided Google Sheet worksheet."""
+    try:
         all_records = worksheet.get_all_records()
         if not all_records:
             return pd.DataFrame()
 
         df = pd.DataFrame(all_records)
-        if "Status" not in df.columns:
-            return df  # Return all if no Status column
 
+        # ensure_headers() guarantees the 'Status' column exists in the sheet.
+        # If no lead has a status yet, the column might be missing from the dataframe records.
+        # In this case, all leads are considered new and we can return the full dataframe.
+        if "Status" not in df.columns:
+            return df
+
+        # Filter for leads with an empty or "New" status.
         new_leads_df = df[df["Status"].astype(str).str.strip().isin(["", "New", "new"])].copy()
         return new_leads_df
     except Exception as e:
-        raise IOError(f"Backend Error: Unexpected error while fetching leads: {e}")
+        raise IOError(f"Backend Error: Unexpected error while fetching leads from worksheet: {e}")
 
-def get_column_map(worksheet) -> Dict[str, int]:
+
+def get_column_map(worksheet: gspread.Worksheet) -> Dict[str, int]:
     """Read the header row and return a dict mapping column names to indices (1-based)."""
     try:
         headers = worksheet.row_values(1)
@@ -347,12 +405,9 @@ Apply for Funding
 # Sheet Update
 # ──────────────────────────────────────────────────────────────────────────────
 
-def update_google_sheet(gspread_client, row_index, status, dossier, email_assets, col_map):
-    """Update a single lead row with results."""
+def update_google_sheet(worksheet: gspread.Worksheet, row_index: int, status: str, dossier: Dict, email_assets: Dict, col_map: Dict[str, int]):
+    """Update a single lead row with results in the provided worksheet."""
     try:
-        spreadsheet = gspread_client.open(config.GOOGLE_SHEET_NAME)
-        worksheet = spreadsheet.sheet1
-
         cells_to_update = [
             gspread.Cell(row_index, col_map["Status"], status),
             gspread.Cell(row_index, col_map["Prospect_Title"], email_assets.get("Prospect_Title", "")),
