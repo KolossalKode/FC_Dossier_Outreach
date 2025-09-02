@@ -17,26 +17,37 @@ if not config.validate_config():
 st.set_page_config(layout="wide")
 st.title("FAST Capital Dossier & Outreach Pipeline")
 
+def _get_scalar_from_series(series, key, row_index_for_warning):
+    """
+    Safely extracts a scalar value from a pandas Series, handling cases where
+    duplicate column names might cause `series.get(key)` to return a Series.
+    """
+    val = series.get(key)
+    if isinstance(val, pd.Series):
+        st.warning(
+            f"Warning for row {row_index_for_warning}: Duplicate column mapping for '{key}'. "
+            f"Using the first value found. Please check your Google Sheet for columns with the same name."
+        )
+        return val.iloc[0] if not val.empty else None
+    return val
+
 # --- Session State Initialization ---
-# This ensures that variables persist across reruns
-if 'processing_started' not in st.session_state:
-    st.session_state.processing_started = False
-if 'sheet_loaded' not in st.session_state:
-    st.session_state.sheet_loaded = False
-if 'gspread_client' not in st.session_state:
-    st.session_state.gspread_client = None
-if 'worksheet' not in st.session_state:
-    st.session_state.worksheet = None
-if 'col_map' not in st.session_state:
-    st.session_state.col_map = None
-if 'all_leads' not in st.session_state:
-    st.session_state.all_leads = pd.DataFrame()
-if 'leads_df' not in st.session_state:
-    st.session_state.leads_df = pd.DataFrame()
-if 'processed_data' not in st.session_state:
-    st.session_state.processed_data = []
-if 'current_index' not in st.session_state:
-    st.session_state.current_index = 0
+DEFAULTS = {
+    "processing_started": False,
+    "sheet_loaded": False,
+    "mapping_complete": False,
+    "gspread_client": None,
+    "worksheet": None,
+    "user_mapping": {},
+    "final_column_map": None,
+    "all_leads": pd.DataFrame(),
+    "leads_df": pd.DataFrame(),
+    "processed_data": [],
+    "current_index": 0,
+}
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 # --- Main App Logic ---
 
@@ -59,19 +70,6 @@ if not st.session_state.sheet_loaded:
                     spreadsheet = st.session_state.gspread_client.open(sheet_name)
                     st.session_state.worksheet = spreadsheet.sheet1
                     st.toast(f"Successfully opened sheet: '{sheet_name}'")
-
-                    # Ensure headers are present, create them if not
-                    success, msg = backend.ensure_headers(st.session_state.worksheet, backend.REQUIRED_HEADERS)
-                    if not success:
-                        raise Exception(msg)
-                    st.toast(msg)
-
-                    # Get the column map for updates later
-                    st.session_state.col_map = backend.get_column_map(st.session_state.worksheet)
-
-                    # Fetch all leads from the now-validated sheet
-                    st.session_state.all_leads = backend.get_new_leads(st.session_state.worksheet)
-
                     st.session_state.sheet_loaded = True
                     st.rerun()
 
@@ -80,11 +78,85 @@ if not st.session_state.sheet_loaded:
                     # Reset client on failure to allow re-authentication
                     st.session_state.gspread_client = None
 
+# STATE 2: Column Mapping - After sheet is loaded, before mapping is confirmed
+elif st.session_state.sheet_loaded and not st.session_state.mapping_complete:
+    st.header("Step 2: Map Your Columns")
+    st.info(f"Sheet: **{st.session_state.worksheet.spreadsheet.title}** > **{st.session_state.worksheet.title}**")
+    st.write("Match the columns the script needs to the columns in your sheet.")
+    st.info("If a required column doesn't exist in your sheet, select the `[Create '...' Column]` option from its dropdown. The column will be added to your Google Sheet automatically when you continue.")
 
-# STATE 2: Processing - After sheet is loaded, before processing starts
-elif st.session_state.sheet_loaded and not st.session_state.processing_started:
-    st.header("Step 2: Fetch and Process Leads")
+    REQUIRED_COLUMNS_WITH_DESC = {
+        'Prospect_Name': 'The full name of the contact person.',
+        'Company_Name': 'The name of the company.',
+        'Prospect_Email': 'The email address of the prospect.',
+        'Prospect_Phone': 'The phone number of the prospect.',
+        'Status': 'Tracks the processing status (e.g., "Processed", "Error"). This will be created if it does not exist.',
+        'Prospect_Title': 'The inferred job title of the prospect. This will be created if it does not exist.',
+        'Halbert_Hook': 'The specific event or trigger for outreach. This will be created if it does not exist.',
+        'Capital_Need_Hypothesis': 'The reason the prospect might need capital. This will be created if it does not exist.',
+        'Selected_Email_Subject': 'The generated subject line for the email. This will be created if it does not exist.',
+        'Selected_Email_Body': 'The generated body for the email. This will be created if it does not exist.',
+        'Dossier_JSON': 'The complete research data in JSON format. This will be created if it does not exist.',
+        'Sources': 'A list of web sources used for the research. This will be created if it does not exist.'
+    }
 
+    try:
+        sheet_columns = [h for h in st.session_state.worksheet.row_values(1) if h]
+    except Exception as e:
+        st.error(f"Could not read columns from the spreadsheet. Error: {e}")
+        sheet_columns = []
+
+    available_columns = ["---"] + sheet_columns
+    col1, col2 = st.columns(2)
+    all_mapped = True
+
+    for i, (req_col, desc) in enumerate(REQUIRED_COLUMNS_WITH_DESC.items()):
+        container = col1 if i % 2 == 0 else col2
+        with container:
+            create_option = f"[Create '{req_col}' Column]"
+            options = [create_option] + available_columns
+            current_selection = st.session_state.user_mapping.get(req_col)
+            if not current_selection:
+                normalized_req = req_col.lower().replace("_", "").replace(" ", "")
+                for col in sheet_columns:
+                    normalized_sheet = col.lower().replace("_", "").replace(" ", "")
+                    if normalized_req == normalized_sheet:
+                        current_selection = col
+                        break
+            
+            default_index = 0
+            if current_selection and current_selection in options:
+                default_index = options.index(current_selection)
+
+            user_choice = st.selectbox(label=f"**{req_col}**", options=options, index=default_index, help=desc, key=f"map_{req_col}")
+            st.session_state.user_mapping[req_col] = user_choice
+            if user_choice == "---":
+                all_mapped = False
+
+    st.write("---")
+    if st.button("Confirm Mapping and Continue", disabled=not all_mapped, type="primary"):
+        with st.spinner("Preparing worksheet and validating mapping..."):
+            try:
+                final_map = backend.prepare_worksheet_from_mapping(
+                    st.session_state.worksheet,
+                    st.session_state.user_mapping,
+                    list(REQUIRED_COLUMNS_WITH_DESC.keys())
+                )
+                st.session_state.final_column_map = final_map
+                st.session_state.mapping_complete = True
+                st.success("Worksheet is ready! Fetching leads...")
+                st.rerun()
+            except Exception as e:
+                st.error(f"An error occurred while preparing the worksheet: {e}")
+
+# STATE 3: Processing - After mapping is complete, before processing starts
+elif st.session_state.mapping_complete and not st.session_state.processing_started:
+    st.header("Step 3: Fetch and Process Leads")
+
+    with st.spinner("Fetching new leads based on your mapping..."):
+        if st.session_state.all_leads.empty:
+            st.session_state.all_leads = backend.get_new_leads(st.session_state.worksheet, st.session_state.user_mapping)
+    
     if not st.session_state.all_leads.empty:
         st.info(f"Found {len(st.session_state.all_leads)} new leads in the Google Sheet.")
         batch_size = st.number_input(
@@ -105,16 +177,24 @@ elif st.session_state.sheet_loaded and not st.session_state.processing_started:
                 total = len(st.session_state.leads_df)
 
                 for i, (index, lead) in enumerate(st.session_state.leads_df.iterrows()):
-                    progress_text = f"Processing lead {i+1}/{total}: {lead.get('Prospect_Name', 'N/A')}"
+                    row_num_for_display = index + 2  # For user-facing messages
+
+                    # Safely extract scalar values, handling potential duplicate columns
+                    company_name = _get_scalar_from_series(lead, 'Company_Name', row_num_for_display)
+                    prospect_name = _get_scalar_from_series(lead, 'Prospect_Name', row_num_for_display)
+                    prospect_email = _get_scalar_from_series(lead, 'Prospect_Email', row_num_for_display)
+                    prospect_phone = _get_scalar_from_series(lead, 'Prospect_Phone', row_num_for_display)
+
+                    progress_text = f"Processing lead {i+1}/{total}: {prospect_name or 'N/A'}"
                     progress_bar.progress((i + 1) / total, text=progress_text)
 
                     dossier = backend.gather_osint(
-                        company_name=lead.get('Company_Name'),
-                        prospect_name=lead.get('Prospect_Name'),
-                        prospect_email=lead.get('Prospect_Email'),
-                        prospect_phone=lead.get('Prospect_Phone')
+                        company_name=company_name,
+                        prospect_name=prospect_name,
+                        prospect_email=prospect_email,
+                        prospect_phone=prospect_phone
                     )
-                    email_assets = backend.create_outreach_assets(dossier, lead.get('Prospect_Name'))
+                    email_assets = backend.create_outreach_assets(dossier, prospect_name)
 
                     processed_list.append({
                         'lead': lead,
@@ -134,17 +214,22 @@ elif st.session_state.sheet_loaded and not st.session_state.processing_started:
             st.rerun()
 
 # STATE 3: Review - After processing is complete
-elif st.session_state.processing_started:
-    st.header("Step 3: Review and Approve Emails")
+elif st.session_state.processing_started: # This is now STATE 4
+    st.header("Step 4: Review and Approve Emails")
 
     if st.session_state.current_index < len(st.session_state.processed_data):
         current_item = st.session_state.processed_data[st.session_state.current_index]
-        lead_info = current_item['lead']
         dossier_info = current_item['dossier']
         email_info = current_item['email']
         row_num = current_item['row_index']
 
-        st.subheader(f"Reviewing Lead {st.session_state.current_index + 1}/{len(st.session_state.processed_data)}: {lead_info.get('Prospect_Name', 'N/A')} at {lead_info.get('Company_Name', 'N/A')}")
+        # Safely extract scalar values for display and actions
+        lead_prospect_name = _get_scalar_from_series(current_item['lead'], 'Prospect_Name', row_num)
+        lead_company_name = _get_scalar_from_series(current_item['lead'], 'Company_Name', row_num)
+        lead_prospect_email = _get_scalar_from_series(current_item['lead'], 'Prospect_Email', row_num)
+
+
+        st.subheader(f"Reviewing Lead {st.session_state.current_index + 1}/{len(st.session_state.processed_data)}: {lead_prospect_name or 'N/A'} at {lead_company_name or 'N/A'}")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -152,8 +237,8 @@ elif st.session_state.processing_started:
             st.json(dossier_info, expanded=True)
         with col2:
             st.markdown("#### Generated Email")
-            st.text_input("Subject", email_info.get('Selected_Email_Subject', ''), disabled=True)
-            st.text_area("Body", email_info.get('Selected_Email_Body', ''), height=400, disabled=True)
+            st.text_input("Subject", email_info.get('Selected_Email_Subject', ''), disabled=True, key=f"subject_{row_num}")
+            st.text_area("Body", email_info.get('Selected_Email_Body', ''), height=400, disabled=True, key=f"body_{row_num}")
 
         # Action buttons
         approve_col, skip_col, spacer = st.columns([1, 1, 5])
@@ -161,14 +246,14 @@ elif st.session_state.processing_started:
             if st.button("✅ Approve & Send", use_container_width=True, type="primary"):
                 with st.spinner("Sending email and updating sheet..."):
                     sent = backend.send_email(
-                        recipient_email=lead_info.get('Prospect_Email'),
+                        recipient_email=lead_prospect_email,
                         subject=email_info.get('Selected_Email_Subject'),
                         body=email_info.get('Selected_Email_Body')
                     )
                     if sent:
                         st.toast("Email sent successfully!")
                         # Use the worksheet from session state for the update
-                        success, msg = backend.update_google_sheet(st.session_state.worksheet, row_num, "Sent", dossier_info, email_info, st.session_state.col_map)
+                        success, msg = backend.update_google_sheet(st.session_state.worksheet, row_num, "Sent", dossier_info, email_info, st.session_state.final_column_map)
                         if success:
                             st.toast("Google Sheet updated.")
                         else:
@@ -183,7 +268,7 @@ elif st.session_state.processing_started:
             if st.button("⏩ Skip", use_container_width=True):
                 with st.spinner("Updating sheet with 'Skipped' status..."):
                     # Use the worksheet from session state for the update
-                    success, msg = backend.update_google_sheet(st.session_state.worksheet, row_num, "Skipped", dossier_info, email_info, st.session_state.col_map)
+                    success, msg = backend.update_google_sheet(st.session_state.worksheet, row_num, "Skipped", dossier_info, email_info, st.session_state.final_column_map)
                     if success:
                         st.toast("Lead skipped. Google Sheet updated.")
                     else:

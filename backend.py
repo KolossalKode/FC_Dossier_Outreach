@@ -125,33 +125,94 @@ def ensure_headers(worksheet: gspread.Worksheet, headers_to_ensure: List[str]):
         return False, error_message
 
 
-def get_new_leads(worksheet: gspread.Worksheet) -> pd.DataFrame:
-    """Fetch new leads from the provided Google Sheet worksheet."""
+def prepare_worksheet_from_mapping(worksheet: gspread.Worksheet, user_mapping: Dict[str, str], required_headers: List[str]) -> Dict[str, int]:
+    """
+    Processes the user's column mapping, creates new columns if needed,
+    and returns a final map of required header -> column index (1-based).
+    """
     try:
-        all_records = worksheet.get_all_records()
+        current_headers = worksheet.row_values(1)
+    except gspread.exceptions.GSpreadException as e:
+        # Handle case where sheet is completely empty
+        if "exceeds grid limits" in str(e):
+            current_headers = []
+        else:
+            raise
+
+    new_cols_to_add = []
+    for req_col, mapped_val in user_mapping.items():
+        create_option_str = f"[Create '{req_col}' Column]"
+        if mapped_val == create_option_str and req_col not in current_headers:
+            new_cols_to_add.append(req_col)
+
+    if new_cols_to_add:
+        start_col_index = len(current_headers) + 1
+        cells_to_update = [gspread.Cell(1, start_col_index + i, col_name) for i, col_name in enumerate(new_cols_to_add)]
+        if cells_to_update:
+            worksheet.update_cells(cells_to_update, value_input_option='RAW')
+            print(f"Backend: Added new columns: {new_cols_to_add}")
+        current_headers = worksheet.row_values(1)
+
+    final_column_map = {}
+    for req_header in required_headers:
+        sheet_col_name = user_mapping.get(req_header)
+        if not sheet_col_name:
+            raise ValueError(f"Mapping for required header '{req_header}' is missing.")
+        if sheet_col_name.startswith("[Create"):
+            sheet_col_name = req_header
+        try:
+            col_index = current_headers.index(sheet_col_name) + 1
+            final_column_map[req_header] = col_index
+        except ValueError:
+            raise ValueError(f"Column '{sheet_col_name}' (mapped to '{req_header}') not found in the sheet.")
+    return final_column_map
+
+
+def get_new_leads(worksheet: gspread.Worksheet, user_mapping: Dict[str, str]) -> pd.DataFrame:
+    """
+    Fetches all records, renames columns based on user mapping,
+    and filters for new leads (where Status is empty or "New").
+    """
+    try:
+        all_records = worksheet.get_all_records(head=1)
         if not all_records:
             return pd.DataFrame()
 
-        df = pd.DataFrame(all_records)
+        df = pd.DataFrame.from_records(all_records)
 
-        # ensure_headers() guarantees the 'Status' column exists in the sheet.
-        # If no lead has a status yet, the column might be missing from the dataframe records.
-        # In this case, all leads are considered new and we can return the full dataframe.
+        # Create a reverse mapping from the actual sheet column name to our standard name
+        # e.g., {'Contact Name': 'Prospect_Name', 'Status': 'Status'}
+        rename_map = {}
+        for req_col, mapped_val in user_mapping.items():
+            # Handle cases where a column was created
+            sheet_col = mapped_val.replace(f"[Create '{req_col}' Column]", req_col)
+            if sheet_col in df.columns:
+                rename_map[sheet_col] = req_col
+
+        df.rename(columns=rename_map, inplace=True)
+
+        # The 'Status' column is now guaranteed to be named 'Status' in the DataFrame
         if "Status" not in df.columns:
+            # If after all mapping, 'Status' is still not there, it means it was
+            # created but the sheet was empty, so no rows have it yet.
+            # We'll consider all rows as new.
             return df
 
-        # Filter for leads with an empty or "New" status.
-        new_leads_df = df[df["Status"].astype(str).str.strip().isin(["", "New", "new"])].copy()
+        # Filter for leads with an empty or "New" status (case-insensitive)
+        new_leads_df = df[
+            df["Status"].fillna("").astype(str).str.strip().str.lower().isin(["", "new"])
+        ].copy()
+
         return new_leads_df
     except Exception as e:
-        raise IOError(f"Backend Error: Unexpected error while fetching leads from worksheet: {e}")
+        raise IOError(f"Backend Error: Unexpected error while fetching leads: {e}")
 
 
 def get_column_map(worksheet: gspread.Worksheet) -> Dict[str, int]:
     """Read the header row and return a dict mapping column names to indices (1-based)."""
     try:
         headers = worksheet.row_values(1)
-        return {header: i + 1 for i, header in enumerate(headers)}
+        return {header: i + 1 for i, header in enumerate(headers) if header}
     except Exception as e:
         raise IOError(f"Backend Error: Failed to read header row from sheet: {e}")
 
