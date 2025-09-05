@@ -30,7 +30,7 @@ import config
 # Gemini / GenAI client
 # ──────────────────────────────────────────────────────────────────────────────
 GENAI_CLIENT = None
-MODEL_ID = getattr(config, "GEMINI_MODEL_ID", "gemini-2.5-pro")  # 2.5 Pro supports Search grounding
+MODEL_ID = getattr(config, "GEMINI_MODEL_ID", "gemini-2.5-pro")  # 2.5 Pro and Flash both support Search grounding
 
 try:
     if not getattr(config, "GEMINI_API_KEY", None):
@@ -202,6 +202,68 @@ def get_column_map(worksheet: gspread.Worksheet) -> Dict[str, int]:
         raise IOError(f"Backend Error: Failed to read header row from sheet: {e}")
 
 
+def process_leads_for_review(worksheet: gspread.Worksheet, user_mapping: Dict[str, str]):
+    """
+    Fetches new leads, enriches them, generates email drafts, and updates the sheet
+    with a 'REVIEW_PENDING' status.
+    """
+    print("backend2: Starting lead processing for review...")
+    final_column_map = prepare_worksheet_from_mapping(worksheet, user_mapping, REQUIRED_HEADERS)
+    new_leads_df = get_new_leads(worksheet, user_mapping)
+
+    if new_leads_df.empty:
+        print("backend2: No new leads to process.")
+        return "No new leads found to process."
+
+    processed_count = 0
+    for index, row in new_leads_df.iterrows():
+        sheet_row_index = index + 2
+        prospect_name = row.get("Prospect_Name", "")
+        company_name = row.get("Company_Name", "")
+        prospect_email = row.get("Prospect_Email", "")
+        prospect_phone = row.get("Prospect_Phone", "")
+
+        print(f"backend2: Processing row {sheet_row_index}: {prospect_name} at {company_name}")
+
+        dossier = gather_osint(company_name, prospect_name, prospect_email, prospect_phone)
+        if dossier.get("error"):
+            update_google_sheet(worksheet, sheet_row_index, f"Research Failed: {dossier['error']}", {}, {}, final_column_map)
+            continue
+
+        email_assets = create_outreach_assets(dossier, prospect_name)
+        if email_assets.get("error"):
+            update_google_sheet(worksheet, sheet_row_index, f"Synthesis Failed: {email_assets['error']}", dossier, {}, final_column_map)
+            continue
+
+        update_google_sheet(
+            worksheet,
+            sheet_row_index,
+            "REVIEW_PENDING",
+            dossier,
+            email_assets,
+            final_column_map,
+        )
+        processed_count += 1
+
+    summary = f"Processed {processed_count} new leads. They are now ready for review."
+    print(f"backend2: {summary}")
+    return summary
+
+
+def get_leads_for_review(worksheet: gspread.Worksheet) -> List[Dict[str, Any]]:
+    """
+    Fetches leads with 'REVIEW_PENDING' status for display in the UI.
+    Returns a list of dicts, including the original row index.
+    """
+    all_records = worksheet.get_all_records(head=1)
+    df = pd.DataFrame.from_records(all_records)
+    review_df = df[df["Status"].fillna("").str.strip().str.lower() == "review_pending"].copy()
+
+    # Add original sheet row index (pandas index is 0-based, sheet is 1-based with a header)
+    review_df['sheet_row_index'] = review_df.index + 2
+    return review_df.to_dict('records')
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Enrichment (OSINT) with Google Search grounding
 # ──────────────────────────────────────────────────────────────────────────────
@@ -292,8 +354,8 @@ def gather_osint(company_name: str, prospect_name: str, prospect_email: str, pro
         )
 
         # Parse model JSON
-        _resp_text = getattr(response, "text", "") or ""
-        if not _resp_text.strip():
+        _resp_text = getattr(response, "text", "")
+        if not _resp_text:
             _resp_text = "{}"
         try:
             data = json.loads(_resp_text)
@@ -427,6 +489,25 @@ def create_outreach_assets(intelligence_report: Dict[str, Any], prospect_name: s
 # ──────────────────────────────────────────────────────────────────────────────
 # Dispatch (Email)
 # ──────────────────────────────────────────────────────────────────────────────
+
+def send_and_update_email(
+    worksheet: gspread.Worksheet,
+    row_index: int,
+    recipient_email: str,
+    subject: str,
+    body: str
+):
+    """
+    Sends a single email and updates the corresponding row's status in the sheet.
+    """
+    col_map = get_column_map(worksheet)
+    if send_email(recipient_email, subject, body):
+        worksheet.update_cell(row_index, col_map["Status"], "Sent")
+        return True, f"Email sent to {recipient_email} and status updated for row {row_index}."
+    else:
+        worksheet.update_cell(row_index, col_map["Status"], "Send Failed")
+        return False, f"Failed to send email for row {row_index}."
+
 
 def send_email(recipient_email: str, subject: str, body: str) -> bool:
     """Send email via SMTP using creds from config."""
