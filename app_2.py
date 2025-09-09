@@ -7,6 +7,19 @@ import pandas as pd
 import backend2
 import config
 
+# --- Rule Persistence Functions ---
+def load_rules():
+    try:
+        with open("llm_rules.txt", "r") as f:
+            return [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        return config.EMAIL_GENERATION_RULES.split('\n') if hasattr(config, 'EMAIL_GENERATION_RULES') and config.EMAIL_GENERATION_RULES else []
+
+def save_rules(rules):
+    with open("llm_rules.txt", "w") as f:
+        f.write("\n".join(rules))
+
+
 # --- Validate config at the very beginning ---
 if not config.validate_config():
     st.error("Your .env file is missing or has invalid configuration. Please check the console output and your .env file for more details.")
@@ -15,7 +28,46 @@ if not config.validate_config():
 
 # --- Streamlit App Initialization ---
 st.set_page_config(layout="wide")
+
+# --- Sidebar for LLM Rule Editor ---
+with st.sidebar:
+    st.header("LLM Rule Editor")
+
+    # Initialize rules from file on first run, then manage in session state
+    if "llm_rules" not in st.session_state:
+        st.session_state.llm_rules = load_rules()
+
+    # Rule display and removal
+    if not st.session_state.llm_rules:
+        st.info("No rules defined. Add rules below.")
+    else:
+        st.write("**Current Rules:**")
+        for i, rule in enumerate(st.session_state.llm_rules):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.text(f"{i + 1}. {rule}")
+            with col2:
+                if st.button("❌", key=f"remove_rule_{i}", help="Remove this rule"):
+                    st.session_state.llm_rules.pop(i)
+                    save_rules(st.session_state.llm_rules)
+                    st.rerun()
+
+    st.write("---")
+
+    # Rule addition
+    new_rule = st.text_area("Enter new rule:", key="new_rule_input", placeholder="e.g., 'The email must be shorter than 150 words.'")
+    if st.button("Add Rule", type="primary"):
+        if new_rule and new_rule.strip():
+            st.session_state.llm_rules.append(new_rule.strip())
+            save_rules(st.session_state.llm_rules)
+            st.toast("Rule added!")
+            # Clear the input box by rerunning
+            st.rerun()
+        else:
+            st.warning("Rule cannot be empty.")
+
 st.title("FAST Capital Dossier & Outreach Pipeline")
+
 
 def _get_scalar_from_series(series, key, row_index_for_warning):
     """
@@ -194,7 +246,8 @@ elif st.session_state.mapping_complete and not st.session_state.processing_start
                         prospect_email=prospect_email,
                         prospect_phone=prospect_phone
                     )
-                    email_assets = backend2.create_outreach_assets(dossier, prospect_name)
+                    rules_string = "\n".join(st.session_state.llm_rules)
+                    email_assets = backend2.create_outreach_assets(dossier, prospect_name, rules_string)
 
                     processed_list.append({
                         'lead': lead,

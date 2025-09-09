@@ -427,7 +427,7 @@ def extract_first_name(full_name: str) -> str:
     return full_name.split()[0]
 
 
-def create_outreach_assets(intelligence_report: Dict[str, Any], prospect_name: str) -> Dict[str, Any]:
+def create_outreach_assets(intelligence_report: Dict[str, Any], prospect_name: str, llm_rules: str = "") -> Dict[str, Any]:
     """
     Generate a condensed dossier + email assets from the prior OSINT report.
     Preserves backend2's EMAIL_GENERATION_RULES emphasis while producing the full 5-key JSON.
@@ -451,8 +451,9 @@ def create_outreach_assets(intelligence_report: Dict[str, Any], prospect_name: s
                 successful_emails=successful_emails,
             )
             + "\n\n**Additional Email Generation Rules (must-follow):**\n" 
-            + "```\n" + str(getattr(config, 'EMAIL_GENERATION_RULES', '')) + "\n```\n"
+            + "```\n" + llm_rules + "\n```\n"
         )
+
 
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
