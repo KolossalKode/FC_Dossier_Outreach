@@ -132,7 +132,7 @@ This document outlines potential improvements and implementation paths for the F
 2.  Click the 'Queue' button for one or more leads.
 3.  Check the Google Sheet. The status for those leads should now be 'QUEUED'.
 4.  From your terminal, run the scheduler script directly: `python scheduler.py`.
-5.  Check the Google Sheet again. The status for the queued leads should now be 'Sent'. Verify the emails were received in the recipient's inbox.
+5.  Check the Google Sheet again. The queued leads should now be 'Sent'. Verify the emails were received in the recipient's inbox.
 
 ---
 
@@ -233,3 +233,71 @@ This document outlines potential improvements and implementation paths for the F
 2.  Go to the 'Review Pending Leads' tab.
 3.  Find the lead and view its details.
 4.  Instead of a raw block of JSON text, the dossier should be displayed with clear headings and formatted text, making it easy to read.
+
+---
+
+## 8. Model Selector
+
+**Goal:** Allow the user to select the model for research and email writing in the UI.
+
+### Path 1: Simple Model Selection
+- **Simplicity:** 9/10
+- **Scalability:** 7/10
+- **Description:** Add two `st.selectbox` widgets to the sidebar in `app_2.py`, one for the research model and one for the email writing model. The selected models will be passed to the backend functions.
+- **Sample Prompt:**
+    > "In `app_2.py`, add two `st.selectbox` widgets to the sidebar. The first, labeled 'Research Model', should allow selecting from a list of models (e.g., 'gemini-1.5-pro', 'gemini-1.5-flash'). The second, labeled 'Email Writing Model', should have the same options. The selected values should be passed to the `gather_osint` and `create_outreach_assets` functions in `backend2.py` respectively."
+
+### Path 2: Model Configuration File
+- **Simplicity:** 7/10
+- **Scalability:** 9/10
+- **Description:** Create a `models.json` file that defines the available models and their properties (e.g., name, api_name, cost). The UI would read this file to populate the model selection widgets. This makes it easier to add or remove models without changing the code.
+- **Sample Prompt:**
+    > "Create a `models.json` file with a list of models, each with a 'name' and 'api_name' field. In `app_2.py`, read this file and use it to populate the model selection `st.selectbox` widgets. Pass the selected model's 'api_name' to the backend functions."
+
+### Path 3: A/B Testing Framework
+- **Simplicity:** 4/10
+- **Scalability:** 10/10
+- **Description:** Implement a simple A/B testing framework. The user can select multiple models to test. For each new lead, the application would randomly assign one of the selected models for research and one for email writing. The model used would be logged in the Google Sheet. This would allow for data-driven decisions on which models perform best.
+- **Sample Prompt:**
+    > "In `app_2.py`, allow the user to select multiple models for A/B testing using `st.multiselect`. In `backend2.py`, when processing a lead, randomly select one of the chosen models for the `gather_osint` call and one for the `create_outreach_assets` call. Add two new columns to the Google Sheet, 'Research Model Used' and 'Email Model Used', and log the randomly selected model names for each lead."
+
+#### Testing
+1. Run the app.
+2. In the sidebar, select a different model for research and email writing.
+3. Process a new lead.
+4. Check the generated dossier and email to see if the output quality differs.
+5. If A/B testing is implemented, check the Google Sheet to see if the model names are logged correctly.
+
+---
+
+## 9. OAuth Integration
+
+**Goal:** Allow users to authenticate with their own Google account to access Google Sheets and send emails, instead of using a shared service account.
+
+### Path 1: Basic Streamlit OAuth for Google
+- **Simplicity:** 8/10
+- **Scalability:** 6/10
+- **Description:** Use a library like `streamlit-oauth` to handle the Google OAuth flow. The application would use the user's token to access Google Sheets and send emails via the Gmail API. This approach is simpler but may require each user to configure their own Google Cloud project.
+- **Sample Prompt:**
+    > "Integrate the `streamlit-oauth` library into `app_2.py`. Configure it for Google authentication. Once the user is authenticated, use their access token to initialize the `gspread` client and to send emails via the Gmail API instead of SMTP."
+
+### Path 2: Centralized OAuth with User Management
+- **Simplicity:** 5/10
+- **Scalability:** 9/10
+- **Description:** Set up an OAuth 2.0 application in the Google Cloud Console. The application will have a single client ID and secret. The backend will handle the token exchange and securely store refresh tokens for users to enable long-running jobs.
+- **Sample Prompt:**
+    > "Create a new module `auth.py` to handle the Google OAuth 2.0 flow. In the Google Cloud Console, create OAuth 2.0 credentials. In `app_2.py`, add a 'Login with Google' button that redirects the user to the Google consent screen. The backend should handle the callback, exchange the authorization code for an access token and refresh token, and store the tokens securely."
+
+### Path 3: Third-Party Authentication Service
+- **Simplicity:** 7/10
+- **Scalability:** 10/10
+- **Description:** Integrate a service like Auth0 or Firebase Authentication. These services manage the entire user authentication lifecycle. The application would receive a JWT from the authentication service, which can then be used to make authenticated requests to Google APIs.
+- **Sample Prompt:**
+    > "Integrate Firebase Authentication into the application. Use the Firebase Web SDK in the Streamlit frontend to handle the Google sign-in flow. On the backend, verify the Firebase ID token and use it to make authenticated requests to Google APIs on behalf of the user."
+
+#### Testing
+1. Run the app.
+2. You should be prompted to log in with your Google account.
+3. After logging in, you should be able to access your own Google Sheets.
+4. When you send an email, it should be sent from your own email address.
+5. Check the "Sent" folder of your Gmail account to verify that the email was sent.
