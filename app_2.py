@@ -290,8 +290,8 @@ elif st.session_state.processing_started: # This is now STATE 4
             st.json(dossier_info, expanded=True)
         with col2:
             st.markdown("#### Generated Email")
-            st.text_input("Subject", email_info.get('Selected_Email_Subject', ''), disabled=True, key=f"subject_{row_num}")
-            st.text_area("Body", email_info.get('Selected_Email_Body', ''), height=400, disabled=True, key=f"body_{row_num}")
+            edited_subject = st.text_input("Subject", email_info.get('Selected_Email_Subject', ''), key=f"subject_{row_num}")
+            edited_body = st.text_area("Body", email_info.get('Selected_Email_Body', ''), height=400, key=f"body_{row_num}")
 
         # Action buttons
         approve_col, skip_col, spacer = st.columns([1, 1, 5])
@@ -300,11 +300,14 @@ elif st.session_state.processing_started: # This is now STATE 4
                 with st.spinner("Sending email and updating sheet..."):
                     sent = backend2.send_email(
                         recipient_email=lead_prospect_email,
-                        subject=email_info.get('Selected_Email_Subject'),
-                        body=email_info.get('Selected_Email_Body')
+                        subject=edited_subject,
+                        body=edited_body
                     )
                     if sent:
                         st.toast("Email sent successfully!")
+                        # Update email_info with the edited values before saving to the sheet
+                        email_info['Selected_Email_Subject'] = edited_subject
+                        email_info['Selected_Email_Body'] = edited_body
                         # Use the worksheet from session state for the update
                         success, msg = backend2.update_google_sheet(st.session_state.worksheet, row_num, "Sent", dossier_info, email_info, st.session_state.final_column_map)
                         if success:
