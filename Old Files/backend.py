@@ -48,6 +48,26 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# This is the canonical list of headers the application expects to find in the Google Sheet.
+# The order defined here is the order in which they will be created if they are missing.
+REQUIRED_HEADERS = [
+    # Input columns
+    "Prospect_Name",
+    "Company_Name",
+    "Prospect_Email",
+    "Prospect_Phone",
+    # Output columns
+    "Status",
+    "Prospect_Title",
+    "Halbert_Hook",
+    "Capital_Need_Hypothesis",
+    "Selected_Email_Subject",
+    "Selected_Email_Body",
+    "Dossier_JSON",
+    "Sources"
+]
+
+
 def authenticate_gspread():
     """
     Authenticates with Google Sheets using credentials from config.
@@ -68,32 +88,131 @@ def authenticate_gspread():
     except Exception as e:
         raise ConnectionError(f"Backend Error: Unexpected error during Google Sheets authentication: {e}")
 
-def get_new_leads(gc: gspread.Client) -> pd.DataFrame:
-    """Fetch new leads from the Google Sheet specified in config."""
-    sheet_name = config.GOOGLE_SHEET_NAME
-    if not sheet_name:
-        raise ValueError("Backend Error: GOOGLE_SHEET_NAME is not set in config.")
+
+def ensure_headers(worksheet: gspread.Worksheet, headers_to_ensure: List[str]):
+    """
+    Ensures the first row of the worksheet contains all required headers.
+    If any headers are missing, they are appended to the first row.
+    Returns a tuple (success: bool, message: str).
+    """
     try:
-        spreadsheet = gc.open(sheet_name)
-        worksheet = spreadsheet.sheet1
-        all_records = worksheet.get_all_records()
+        # Get existing headers. gspread returns None for empty cells at the end, so filter them out.
+        existing_headers = [h for h in worksheet.row_values(1) if h]
+
+        # Use a set for efficient checking of what's already there
+        existing_headers_set = set(existing_headers)
+        missing_headers = [h for h in headers_to_ensure if h not in existing_headers_set]
+
+        if missing_headers:
+            print(f"Backend: Missing headers found: {missing_headers}. Appending them to the sheet.")
+            # The new header row is the existing one plus the new ones
+            new_header_row = existing_headers + missing_headers
+
+            # Create a list of gspread.Cell objects to update the first row
+            # This is more robust than updating a range by A1 notation.
+            cell_list = [gspread.Cell(1, i + 1, value) for i, value in enumerate(new_header_row)]
+            worksheet.update_cells(cell_list)
+
+            print("Backend: Headers updated successfully.")
+            return True, "Headers were missing and have been successfully added."
+        else:
+            print("Backend: All required headers are present.")
+            return True, "All required headers are already present."
+
+    except Exception as e:
+        error_message = f"Backend Error: Failed to ensure headers in Google Sheet: {e}"
+        print(error_message)
+        return False, error_message
+
+
+def prepare_worksheet_from_mapping(worksheet: gspread.Worksheet, user_mapping: Dict[str, str], required_headers: List[str]) -> Dict[str, int]:
+    """
+    Processes the user's column mapping, creates new columns if needed,
+    and returns a final map of required header -> column index (1-based).
+    """
+    try:
+        current_headers = worksheet.row_values(1)
+    except gspread.exceptions.GSpreadException as e:
+        # Handle case where sheet is completely empty
+        if "exceeds grid limits" in str(e):
+            current_headers = []
+        else:
+            raise
+
+    new_cols_to_add = []
+    for req_col, mapped_val in user_mapping.items():
+        create_option_str = f"[Create '{req_col}' Column]"
+        if mapped_val == create_option_str and req_col not in current_headers:
+            new_cols_to_add.append(req_col)
+
+    if new_cols_to_add:
+        start_col_index = len(current_headers) + 1
+        cells_to_update = [gspread.Cell(1, start_col_index + i, col_name) for i, col_name in enumerate(new_cols_to_add)]
+        if cells_to_update:
+            worksheet.update_cells(cells_to_update, value_input_option='RAW')
+            print(f"Backend: Added new columns: {new_cols_to_add}")
+        current_headers = worksheet.row_values(1)
+
+    final_column_map = {}
+    for req_header in required_headers:
+        sheet_col_name = user_mapping.get(req_header)
+        if not sheet_col_name:
+            raise ValueError(f"Mapping for required header '{req_header}' is missing.")
+        if sheet_col_name.startswith("[Create"):
+            sheet_col_name = req_header
+        try:
+            col_index = current_headers.index(sheet_col_name) + 1
+            final_column_map[req_header] = col_index
+        except ValueError:
+            raise ValueError(f"Column '{sheet_col_name}' (mapped to '{req_header}') not found in the sheet.")
+    return final_column_map
+
+
+def get_new_leads(worksheet: gspread.Worksheet, user_mapping: Dict[str, str]) -> pd.DataFrame:
+    """
+    Fetches all records, renames columns based on user mapping,
+    and filters for new leads (where Status is empty or "New").
+    """
+    try:
+        all_records = worksheet.get_all_records(head=1)
         if not all_records:
             return pd.DataFrame()
 
-        df = pd.DataFrame(all_records)
-        if "Status" not in df.columns:
-            return df  # Return all if no Status column
+        df = pd.DataFrame.from_records(all_records)
 
-        new_leads_df = df[df["Status"].astype(str).str.strip().isin(["", "New", "new"])].copy()
+        # Create a reverse mapping from the actual sheet column name to our standard name
+        # e.g., {'Contact Name': 'Prospect_Name', 'Status': 'Status'}
+        rename_map = {}
+        for req_col, mapped_val in user_mapping.items():
+            # Handle cases where a column was created
+            sheet_col = mapped_val.replace(f"[Create '{req_col}' Column]", req_col)
+            if sheet_col in df.columns:
+                rename_map[sheet_col] = req_col
+
+        df.rename(columns=rename_map, inplace=True)
+
+        # The 'Status' column is now guaranteed to be named 'Status' in the DataFrame
+        if "Status" not in df.columns:
+            # If after all mapping, 'Status' is still not there, it means it was
+            # created but the sheet was empty, so no rows have it yet.
+            # We'll consider all rows as new.
+            return df
+
+        # Filter for leads with an empty or "New" status (case-insensitive)
+        new_leads_df = df[
+            df["Status"].fillna("").astype(str).str.strip().str.lower().isin(["", "new"])
+        ].copy()
+
         return new_leads_df
     except Exception as e:
         raise IOError(f"Backend Error: Unexpected error while fetching leads: {e}")
 
-def get_column_map(worksheet) -> Dict[str, int]:
+
+def get_column_map(worksheet: gspread.Worksheet) -> Dict[str, int]:
     """Read the header row and return a dict mapping column names to indices (1-based)."""
     try:
         headers = worksheet.row_values(1)
-        return {header: i + 1 for i, header in enumerate(headers)}
+        return {header: i + 1 for i, header in enumerate(headers) if header}
     except Exception as e:
         raise IOError(f"Backend Error: Failed to read header row from sheet: {e}")
 
@@ -347,12 +466,9 @@ Apply for Funding
 # Sheet Update
 # ──────────────────────────────────────────────────────────────────────────────
 
-def update_google_sheet(gspread_client, row_index, status, dossier, email_assets, col_map):
-    """Update a single lead row with results."""
+def update_google_sheet(worksheet: gspread.Worksheet, row_index: int, status: str, dossier: Dict, email_assets: Dict, col_map: Dict[str, int]):
+    """Update a single lead row with results in the provided worksheet."""
     try:
-        spreadsheet = gspread_client.open(config.GOOGLE_SHEET_NAME)
-        worksheet = spreadsheet.sheet1
-
         cells_to_update = [
             gspread.Cell(row_index, col_map["Status"], status),
             gspread.Cell(row_index, col_map["Prospect_Title"], email_assets.get("Prospect_Title", "")),

@@ -18,7 +18,7 @@ googlesearch-python==1.2.3
 
 #For interacting with the Gemini LLM
 # Pin to a newer version to ensure features like `genai.Tool` are available for grounded search.
-google-generativeai>=1.3.0
+google-genai>=1.3.0
 
 #For loading environment variables from the .env file
 python-dotenv==1.0.1

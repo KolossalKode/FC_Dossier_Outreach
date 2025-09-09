@@ -39,6 +39,24 @@ SENDER_APP_PASSWORD = os.environ.get('SENDER_APP_PASSWORD')
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
 
+# --- Module 5: Email Generation Rules ---
+# These rules are injected into the prompt for the LLM to ensure
+# consistency and effectiveness in outreach emails.
+
+EMAIL_RULE_1 = "- Let them know we only need a one-minute digital app and their last 6 months of business bank statements to price out options."
+EMAIL_RULE_2 = "- Let them know we can provide up to $3 million on an unsecured basis and fund within 24-48 hours of starting the process."
+EMAIL_RULE_3 = "- Let them know we have terms as long as 4 years and rates starting at 1% per month."
+EMAIL_RULE_4 = """- Always end the email with a no-oriented question which asks if it would be ridiculous/ a waste of time etc to look at potential options which lets them say no while still agreeing to engage."""
+
+# Combine rules into a single block for easy injection into the prompt.
+EMAIL_GENERATION_RULES = f"""
+**IMPORTANT RULES FOR THE EMAIL CONTENT:**
+{EMAIL_RULE_1}
+{EMAIL_RULE_2}
+{EMAIL_RULE_3}
+{EMAIL_RULE_4}
+"""
+
 # --- Validation Function ---
 def validate_config():
     """Checks for presence and validity of essential configuration variables."""
