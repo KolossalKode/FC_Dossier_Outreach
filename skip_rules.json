@@ -1,0 +1,32 @@
+[
+    {
+        "column": "Dossier_JSON",
+        "keywords": [
+            "trucking less than 10 trucks"
+        ]
+    },
+    {
+        "column": "Dossier_JSON",
+        "keywords": [
+            "SOS filing inactive"
+        ]
+    },
+    {
+        "column": "Dossier_JSON",
+        "keywords": [
+            "Bankruptcy filing after 2021"
+        ]
+    },
+    {
+        "column": "Dossier_JSON",
+        "keywords": [
+            "Felony conviction"
+        ]
+    },
+    {
+        "column": "Dossier_JSON",
+        "keywords": [
+            "Deceased"
+        ]
+    }
+]

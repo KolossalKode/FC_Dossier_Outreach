@@ -6,3 +6,5 @@ Subject line should be Introduction - Fast Capital NYC
 The primary goal of the initial contact is to establish a presence, not to close a deal. Frame the outreach as a simple introduction of the firm and its services using language which will resonate with the prospect
 Explicitly state that the goal is not to disrupt the prospect's current business arrangements. Frame our company as a valuable option available if and when an opportunity arises, rather than as an immediate competitor.
 Emphasize we are always looking for businesses we can support in accomplishing their long term and short term financing goals with creative and flexible financing.
+No em dashes
+Emails must be less than 180 words

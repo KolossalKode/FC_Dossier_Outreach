@@ -6,6 +6,7 @@ import streamlit as st
 import pandas as pd
 import backend2
 import config
+import json
 
 # --- Rule Persistence Functions ---
 def load_rules():
@@ -18,6 +19,20 @@ def load_rules():
 def save_rules(rules):
     with open("llm_rules.txt", "w") as f:
         f.write("\n".join(rules))
+
+
+# --- Skip Rule Persistence ---
+def load_skip_rules():
+    try:
+        with open("skip_rules.json", "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def save_skip_rules(rules):
+    with open("skip_rules.json", "w") as f:
+        json.dump(rules, f, indent=4)
+
 
 
 # --- Validate config at the very beginning ---
@@ -66,6 +81,47 @@ with st.sidebar:
         else:
             st.warning("Rule cannot be empty.")
 
+    st.write("---")
+    st.header("Lead Skip Rules")
+
+    if "skip_rules" not in st.session_state:
+        st.session_state.skip_rules = load_skip_rules()
+
+    # Rule display and removal
+    if not st.session_state.skip_rules:
+        st.info("No skip rules defined. Add rules below.")
+    else:
+        st.write("**Current Skip Rules:**")
+        for i, rule in enumerate(st.session_state.skip_rules):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.text(f"{i + 1}. IF '{rule['column']}' CONTAINS ANY OF: {', '.join(rule['keywords'])}")
+            with col2:
+                if st.button("❌", key=f"remove_skip_rule_{i}", help="Remove this rule"):
+                    st.session_state.skip_rules.pop(i)
+                    save_skip_rules(st.session_state.skip_rules)
+                    st.rerun()
+    
+    st.write("---")
+
+    # Rule addition
+    st.write("**Add New Skip Rule:**")
+    rule_col, keywords_col = st.columns(2)
+    with rule_col:
+        new_skip_column = st.text_input("Column Name:", key="new_skip_column", placeholder="e.g., Company_Name")
+    with keywords_col:
+        new_skip_keywords = st.text_input("Keywords (comma-separated):", key="new_skip_keywords", placeholder="e.g., LLC, Inc")
+
+    if st.button("Add Skip Rule"):
+        if new_skip_column and new_skip_keywords:
+            keywords_list = [kw.strip() for kw in new_skip_keywords.split(',')]
+            st.session_state.skip_rules.append({"column": new_skip_column, "keywords": keywords_list})
+            save_skip_rules(st.session_state.skip_rules)
+            st.toast("Skip rule added!")
+            st.rerun()
+        else:
+            st.warning("Please provide both a column name and keywords.")
+
 st.title("FAST Capital Dossier & Outreach Pipeline")
 
 
@@ -96,6 +152,7 @@ DEFAULTS = {
     "leads_df": pd.DataFrame(),
     "processed_data": [],
     "current_index": 0,
+    "skipping_lead_index": None, # Used to manage the two-step skip process
 }
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -143,6 +200,7 @@ elif st.session_state.sheet_loaded and not st.session_state.mapping_complete:
         'Prospect_Email': 'The email address of the prospect.',
         'Prospect_Phone': 'The phone number of the prospect.',
         'Status': 'Tracks the processing status (e.g., "Processed", "Error"). This will be created if it does not exist.',
+        'Skip Reason': 'The reason a lead was manually skipped. This will be created if it does not exist.',
         'Prospect_Title': 'The inferred job title of the prospect. This will be created if it does not exist.',
         'Halbert_Hook': 'The specific event or trigger for outreach. This will be created if it does not exist.',
         'Capital_Need_Hypothesis': 'The reason the prospect might need capital. This will be created if it does not exist.',
@@ -227,9 +285,18 @@ elif st.session_state.mapping_complete and not st.session_state.processing_start
                 progress_bar = st.progress(0, text="Initializing...")
                 processed_list = []
                 total = len(st.session_state.leads_df)
+                skipped_leads = []
 
                 for i, (index, lead) in enumerate(st.session_state.leads_df.iterrows()):
                     row_num_for_display = index + 2  # For user-facing messages
+                    prospect_name_for_log = _get_scalar_from_series(lead, 'Prospect_Name', row_num_for_display) or "N/A"
+
+                    # Check if lead should be skipped
+                    should_skip, reason = backend2.should_skip_lead(lead, st.session_state.skip_rules)
+                    if should_skip:
+                        skipped_leads.append(f"- Lead: {prospect_name_for_log} (Row {row_num_for_display}) skipped: {reason}")
+                        backend2.update_google_sheet(st.session_state.worksheet, row_num_for_display, f"Skipped: {reason}", {}, {}, st.session_state.final_column_map)
+                        continue
 
                     # Safely extract scalar values, handling potential duplicate columns
                     company_name = _get_scalar_from_series(lead, 'Company_Name', row_num_for_display)
@@ -257,6 +324,11 @@ elif st.session_state.mapping_complete and not st.session_state.processing_start
                     })
 
                 st.session_state.processed_data = processed_list
+                
+                if skipped_leads:
+                    st.warning("Some leads were skipped based on your rules:")
+                    st.text("\n".join(skipped_leads))
+
             st.success(f"Successfully processed {len(processed_list)} leads. Ready for review.")
             st.rerun()
     else:
@@ -267,8 +339,20 @@ elif st.session_state.mapping_complete and not st.session_state.processing_start
             st.rerun()
 
 # STATE 3: Review - After processing is complete
-elif st.session_state.processing_started: # This is now STATE 4
+# STATE 3: Review - After processing is complete
+# STATE 4: Review - After processing is complete
+elif st.session_state.processing_started:
     st.header("Step 4: Review and Approve Emails")
+
+    SKIP_REASONS = [
+        "Not a target industry",
+        "Contact person not found / invalid",
+        "Company out of business / acquired",
+        "Insufficient data for personalization",
+        "Does not appear to need funding",
+        "Already a client / in contact",
+        "Other",
+    ]
 
     if st.session_state.current_index < len(st.session_state.processed_data):
         current_item = st.session_state.processed_data[st.session_state.current_index]
@@ -281,61 +365,83 @@ elif st.session_state.processing_started: # This is now STATE 4
         lead_company_name = _get_scalar_from_series(current_item['lead'], 'Company_Name', row_num)
         lead_prospect_email = _get_scalar_from_series(current_item['lead'], 'Prospect_Email', row_num)
 
-
         st.subheader(f"Reviewing Lead {st.session_state.current_index + 1}/{len(st.session_state.processed_data)}: {lead_prospect_name or 'N/A'} at {lead_company_name or 'N/A'}")
 
+        # --- Display Area ---
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### Generated Dossier")
             st.json(dossier_info, expanded=True)
         with col2:
-            st.markdown("#### Generated Email")
-            edited_subject = st.text_input("Subject", email_info.get('Selected_Email_Subject', ''), key=f"subject_{row_num}")
-            edited_body = st.text_area("Body", email_info.get('Selected_Email_Body', ''), height=400, key=f"body_{row_num}")
-
-        # Action buttons
-        approve_col, skip_col, spacer = st.columns([1, 1, 5])
-        with approve_col:
-            if st.button("✅ Approve & Send", use_container_width=True, type="primary"):
-                with st.spinner("Sending email and updating sheet..."):
-                    sent = backend2.send_email(
-                        recipient_email=lead_prospect_email,
-                        subject=edited_subject,
-                        body=edited_body
-                    )
-                    if sent:
-                        st.toast("Email sent successfully!")
-                        # Update email_info with the edited values before saving to the sheet
-                        email_info['Selected_Email_Subject'] = edited_subject
-                        email_info['Selected_Email_Body'] = edited_body
-                        # Use the worksheet from session state for the update
-                        success, msg = backend2.update_google_sheet(st.session_state.worksheet, row_num, "Sent", dossier_info, email_info, st.session_state.final_column_map)
-                        if success:
-                            st.toast("Google Sheet updated.")
-                        else:
-                            st.error(f"Sheet Update Failed: {msg}")
-                    else:
-                        st.error("Failed to send email. Check dispatch logs.")
+            # If we are in the process of skipping this specific lead, show the reason UI
+            if st.session_state.skipping_lead_index == row_num:
+                st.markdown("#### Log Skip Reason")
+                reason = st.selectbox("Please select a reason for skipping:", options=SKIP_REASONS, index=0, key=f"skip_reason_{row_num}")
                 
-                st.session_state.current_index += 1
-                st.rerun()
+                confirm_col, cancel_col, spacer = st.columns([2, 2, 3])
+                with confirm_col:
+                    if st.button("Confirm Skip", use_container_width=True, type="primary", key=f"confirm_skip_{row_num}"):
+                        with st.spinner("Updating sheet..."):
+                            success, msg = backend2.skip_lead(
+                                st.session_state.worksheet, 
+                                row_num, 
+                                reason, 
+                                st.session_state.final_column_map
+                            )
+                            if success:
+                                st.toast(f"Lead skipped: {reason}")
+                            else:
+                                st.error(f"Sheet Update Failed: {msg}")
+                        
+                        st.session_state.skipping_lead_index = None
+                        st.session_state.current_index += 1
+                        st.rerun()
+                with cancel_col:
+                    if st.button("Cancel", use_container_width=True, key=f"cancel_skip_{row_num}"):
+                        st.session_state.skipping_lead_index = None
+                        st.rerun()
+            # Otherwise, show the normal email editor
+            else:
+                st.markdown("#### Generated Email")
+                edited_subject = st.text_input("Subject", email_info.get('Selected_Email_Subject', ''), key=f"subject_{row_num}")
+                edited_body = st.text_area("Body", email_info.get('Selected_Email_Body', ''), height=400, key=f"body_{row_num}")
 
-        with skip_col:
-            if st.button("⏩ Skip", use_container_width=True):
-                with st.spinner("Updating sheet with 'Skipped' status..."):
-                    # Use the worksheet from session state for the update
-                    success, msg = backend2.update_google_sheet(st.session_state.worksheet, row_num, "Skipped", dossier_info, email_info, st.session_state.final_column_map)
-                    if success:
-                        st.toast("Lead skipped. Google Sheet updated.")
-                    else:
-                        st.error(f"Sheet Update Failed: {msg}")
+        st.write("---")
 
-                st.session_state.current_index += 1
-                st.rerun()
+        # --- Action Buttons (only show if not in skip mode) ---
+        if st.session_state.skipping_lead_index != row_num:
+            approve_col, skip_col, spacer = st.columns([2, 2, 3])
+            with approve_col:
+                if st.button("✅ Approve & Send", use_container_width=True, type="primary"):
+                    with st.spinner("Sending email and updating sheet..."):
+                        sent = backend2.send_email(
+                            recipient_email=lead_prospect_email,
+                            subject=edited_subject,
+                            body=edited_body
+                        )
+                        if sent:
+                            st.toast("Email sent successfully!")
+                            email_info['Selected_Email_Subject'] = edited_subject
+                            email_info['Selected_Email_Body'] = edited_body
+                            success, msg = backend2.update_google_sheet(st.session_state.worksheet, row_num, "Sent", dossier_info, email_info, st.session_state.final_column_map)
+                            if success:
+                                st.toast("Google Sheet updated.")
+                            else:
+                                st.error(f"Sheet Update Failed: {msg}")
+                        else:
+                            st.error("Failed to send email. Check dispatch logs.")
+                    
+                    st.session_state.current_index += 1
+                    st.rerun()
+
+            with skip_col:
+                if st.button("⏩ Skip", use_container_width=True):
+                    st.session_state.skipping_lead_index = row_num
+                    st.rerun()
     else:
         st.success("🎉 All leads have been reviewed. Pipeline run complete!")
         if st.button("Start New Batch"):
-            # Clear state to allow a new run without restarting the server
             for key in st.session_state.keys():
-                del st.session_state[key]
+                if key != 'llm_rules' and key != 'skip_rules': # Preserve rules
+                    del st.session_state[key]
             st.rerun()

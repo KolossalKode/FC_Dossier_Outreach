@@ -201,6 +201,20 @@ def get_column_map(worksheet: gspread.Worksheet) -> Dict[str, int]:
     except Exception as e:
         raise IOError(f"Backend Error: Failed to read header row from sheet: {e}")
 
+def should_skip_lead(lead: pd.Series, skip_rules: List[Dict[str, Any]]) -> (bool, str):
+    """
+    Checks if a lead should be skipped based on the defined rules.
+    Returns a tuple (should_skip, reason).
+    """
+    for rule in skip_rules:
+        column_to_check = rule.get("column")
+        keywords = rule.get("keywords", [])
+        if column_to_check and column_to_check in lead and keywords:
+            lead_value = str(lead[column_to_check]).lower()
+            for keyword in keywords:
+                if keyword.lower() in lead_value:
+                    return True, f"Skipped because column '{column_to_check}' contained keyword '{keyword}'"
+    return False, ""
 
 def process_leads_for_review(worksheet: gspread.Worksheet, user_mapping: Dict[str, str]):
     """
@@ -553,6 +567,28 @@ Apply for Funding
 # ──────────────────────────────────────────────────────────────────────────────
 # Sheet Update
 # ──────────────────────────────────────────────────────────────────────────────
+
+def skip_lead(
+    worksheet: gspread.Worksheet,
+    row_index: int,
+    reason: str,
+    col_map: Dict[str, int],
+):
+    """Updates a lead's status to 'Skipped' and logs the reason."""
+    try:
+        cells_to_update = [
+            gspread.Cell(row_index, col_map["Status"], "Skipped"),
+        ]
+        if "Skip Reason" in col_map:
+            cells_to_update.append(
+                gspread.Cell(row_index, col_map["Skip Reason"], reason)
+            )
+        
+        worksheet.update_cells(cells_to_update)
+        return True, f"Successfully skipped row {row_index} with reason: {reason}."
+    except Exception as e:
+        return False, f"Failed to update sheet for skip: {e}"
+
 
 def update_google_sheet(
     worksheet: gspread.Worksheet,
